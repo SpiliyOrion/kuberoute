@@ -1,0 +1,12 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - KUBEROUTE_REMOTE_BASE_URL
+      - KUBEROUTE_REMOTE_MODEL_ID
+      - KUBEROUTE_REMOTE_API_KEY
+      - KUBEROUTE_REMOTE_DEADLINE_SECONDS

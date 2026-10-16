@@ -80,6 +80,41 @@ uvicorn kuberoute_gateway.main:app --reload
 
 On Linux/macOS, use `python3 -m venv .venv` and `source .venv/bin/activate` instead. Visit <http://127.0.0.1:8000/health>.
 
+## Run with Docker
+
+On Windows, install [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/),
+enable its WSL 2 backend, and start Docker Desktop. From the repository root in PowerShell:
+
+```powershell
+docker build -t kuberoute-gateway:local .
+docker run --rm -d --name kuberoute-gateway -p 8000:8000 kuberoute-gateway:local
+docker inspect --format '{{.State.Health.Status}}' kuberoute-gateway
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/health/live
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+Invoke-RestMethod http://127.0.0.1:8000/v1/models
+docker stop kuberoute-gateway
+```
+
+The image runs as an unprivileged user, installs runtime dependencies only, and checks `/health`
+inside the container. It includes the gateway and its mock models, but no Ollama service or model
+files. The same setup is available with `docker compose up --build -d` and
+`docker compose ps`; stop it with `docker compose down`.
+
+For an inference server running on the Windows host, set the existing environment variables
+before starting Compose. Use Docker Desktop's `host.docker.internal` address because
+`127.0.0.1` inside the container refers to the container itself:
+
+```powershell
+$env:KUBEROUTE_REMOTE_BASE_URL = "http://host.docker.internal:11434"
+$env:KUBEROUTE_REMOTE_MODEL_ID = "qwen3:0.6b"
+docker compose up --build -d
+```
+
+Compose forwards these variables only when set in the host environment, along with optional
+`KUBEROUTE_REMOTE_API_KEY` and `KUBEROUTE_REMOTE_DEADLINE_SECONDS`. The container does not
+start or download an external model server.
+
 ## Test
 
 ```bash
