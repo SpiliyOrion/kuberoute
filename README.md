@@ -4,9 +4,36 @@
 
 KubeRoute aims to route inference requests to the best available model and, when useful, select a retrieval strategy using measured quality, cost, latency, and resource signals. Planned: Kubernetes, cloud deployments, retrieval/RAG, evaluation, and a full-stack control plane.
 
-## Current milestone (M0)
+## Current gateway
 
-The initial FastAPI gateway has a `GET /health` endpoint. **No model inference, intelligent routing, retrieval, or Kubernetes integration is implemented yet.**
+The FastAPI gateway has `GET /health`, `GET /health/live`, and `GET /health/ready`
+endpoints. It also serves two **simulated** chat models, `mock-small` and `mock-large`.
+They return deterministic responses for testing and do not run an LLM.
+
+The gateway package also defines a minimal chat completion request/response schema, a
+transport-independent backend contract, and an in-memory model registry. Requests require a
+nonempty model ID and at least one system, user, or assistant message with string content.
+Temperature is optional and must be between 0 and 2. Streaming is limited to `false`;
+unsupported fields (including tools) and message formats return HTTP 422. Unknown model IDs
+return HTTP 404. Unexpected backend failures return HTTP 500 with a generic message.
+
+List available models:
+
+```bash
+curl http://127.0.0.1:8000/v1/models
+```
+
+Request a simulated chat completion:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"mock-small","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+```
+
+Set `model` to `mock-large` to select the other simulated backend. Inference is synchronous
+and non-streaming; adaptive routing, retrieval, real model downloads, and deployment integrations
+are future work.
 
 ## Prerequisites
 
