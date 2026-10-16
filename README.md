@@ -31,9 +31,38 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"mock-small","messages":[{"role":"user","content":"Hello"}],"stream":false}'
 ```
 
-Set `model` to `mock-large` to select the other simulated backend. Inference is synchronous
-and non-streaming; adaptive routing, retrieval, real model downloads, and deployment integrations
-are future work.
+Set `model` to `mock-large` to select the other simulated backend.
+
+To enable one external OpenAI-compatible model server, set these environment variables before
+starting the gateway:
+
+```powershell
+$env:KUBEROUTE_REMOTE_BASE_URL = "http://127.0.0.1:8001"
+$env:KUBEROUTE_REMOTE_MODEL_ID = "my-model"
+# Optional, only if the server requires a bearer token:
+$env:KUBEROUTE_REMOTE_API_KEY = "your-token"
+# Optional overall deadline in seconds:
+$env:KUBEROUTE_REMOTE_DEADLINE_SECONDS = "60"
+uvicorn kuberoute_gateway.main:app --reload
+```
+
+The base URL is the server root; the adapter appends `/v1/chat/completions`. The configured model
+ID appears in `/v1/models` and is sent upstream in each request. Select it with the `model`
+field in a chat request. The remote model is absent when both required variables are unset;
+setting just one causes startup to fail. Keep API keys out of version control.
+
+The adapter supports asynchronous, non-streaming text completions with a single assistant
+message. It uses 3-second connect and pool timeouts, a 10-second write timeout, and a 30-second
+read timeout. Upstream timeouts return HTTP 504; connection errors, upstream HTTP errors, and
+invalid responses return HTTP 502 without exposing upstream details. Mock models continue to
+work without an external server. Streaming, adaptive routing, retrieval, and deployment
+integrations are future work.
+
+The gateway shares one HTTP client across remote requests and closes it when the app stops.
+Set `KUBEROUTE_REMOTE_DEADLINE_SECONDS` to a positive number for a total request deadline;
+it includes the upstream HTTP exchange and response validation. The adapter accepts exactly
+one upstream choice with an assistant text message and a `stop` or `length` finish reason.
+Other finish reasons and multiple choices return HTTP 502.
 
 ## Prerequisites
 

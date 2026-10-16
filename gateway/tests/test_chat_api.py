@@ -82,7 +82,7 @@ def test_unknown_model_returns_404() -> None:
 
 
 def test_backend_failure_returns_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail(request: NormalizedChatRequest) -> ModelOutput:
+    async def fail(request: NormalizedChatRequest) -> ModelOutput:
         raise RuntimeError("secret internal failure")
 
     monkeypatch.setattr(registry.get("mock-small"), "complete", fail)

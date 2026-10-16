@@ -33,7 +33,7 @@ class ChatCompletionChoice(BaseModel):
 
     index: int = Field(ge=0)
     message: AssistantMessage
-    finish_reason: Literal["stop"] = "stop"
+    finish_reason: Literal["stop", "length"] = "stop"
 
 
 class ChatCompletionResponse(BaseModel):

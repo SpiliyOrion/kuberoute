@@ -1,6 +1,8 @@
 """HTTP entry point for KubeRoute."""
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import AsyncIterator
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -8,6 +10,14 @@ from fastapi import FastAPI, HTTPException
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
 from kuberoute_gateway.mock_backends import MockLargeBackend, MockSmallBackend
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
+from kuberoute_gateway.remote_backend import (
+    BackendConnectionError,
+    BackendHTTPError,
+    BackendResponseError,
+    BackendTimeoutError,
+    OpenAICompatibleBackend,
+    remote_config_from_env,
+)
 from kuberoute_gateway.schemas import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -15,10 +25,46 @@ from kuberoute_gateway.schemas import (
     ChatCompletionResponse,
 )
 
-app = FastAPI(title="KubeRoute Gateway", version="0.1.0")
-registry = ModelRegistry()
-registry.register("mock-small", MockSmallBackend())
-registry.register("mock-large", MockLargeBackend())
+
+def create_registry() -> ModelRegistry:
+    models = ModelRegistry()
+    models.register("mock-small", MockSmallBackend())
+    models.register("mock-large", MockLargeBackend())
+    config = remote_config_from_env()
+    if config is not None:
+        models.register(
+            config.model_id,
+            OpenAICompatibleBackend(
+                config.base_url,
+                config.model_id,
+                config.api_key,
+                deadline_seconds=config.deadline_seconds,
+            ),
+        )
+    return models
+
+
+registry = create_registry()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    remote = None
+    for model_id in registry.model_ids():
+        backend = registry.get(model_id)
+        if isinstance(backend, OpenAICompatibleBackend):
+            remote = backend
+            break
+    if remote is not None:
+        await remote.start()
+    try:
+        yield
+    finally:
+        if remote is not None:
+            await remote.close()
+
+
+app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/v1/models")
@@ -31,8 +77,8 @@ def list_models() -> dict[str, object]:
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
-    """Run a synchronous chat completion on the selected model."""
+async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
+    """Run a non-streaming chat completion on the selected model."""
     try:
         backend = registry.get(request.model)
     except UnknownModelError as exc:
@@ -47,15 +93,23 @@ def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResp
         temperature=request.temperature,
     )
     try:
-        output = backend.complete(normalized)
+        output = await backend.complete(normalized)
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid4().hex}",
             created=int(datetime.now(timezone.utc).timestamp()),
             model=request.model,
             choices=[
-                ChatCompletionChoice(index=0, message=AssistantMessage(content=output.content))
+                ChatCompletionChoice(
+                    index=0,
+                    message=AssistantMessage(content=output.content),
+                    finish_reason=output.finish_reason,
+                )
             ],
         )
+    except BackendTimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Upstream model timed out") from exc
+    except (BackendConnectionError, BackendHTTPError, BackendResponseError) as exc:
+        raise HTTPException(status_code=502, detail="Upstream model failed") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Model inference failed") from exc
 
