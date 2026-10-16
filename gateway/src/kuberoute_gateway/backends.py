@@ -20,9 +20,10 @@ class NormalizedChatRequest:
 @dataclass(frozen=True)
 class ModelOutput:
     content: str
+    finish_reason: Literal["stop", "length"] = "stop"
 
 
 class ChatBackend(Protocol):
-    def complete(self, request: NormalizedChatRequest) -> ModelOutput:
+    async def complete(self, request: NormalizedChatRequest) -> ModelOutput:
         """Produce one non-streaming assistant response."""
         ...

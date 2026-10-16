@@ -74,3 +74,21 @@ def test_response_rejects_unsupported_finish_reason() -> None:
                 ],
             }
         )
+
+
+def test_response_accepts_length_finish_reason() -> None:
+    response = ChatCompletionResponse.model_validate(
+        {
+            "id": "chatcmpl-2",
+            "created": 2,
+            "model": "remote-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Partial"},
+                    "finish_reason": "length",
+                }
+            ],
+        }
+    )
+    assert response.choices[0].finish_reason == "length"

@@ -1,6 +1,7 @@
 """Type contract tests without an inference implementation."""
 
 from dataclasses import FrozenInstanceError
+from inspect import iscoroutinefunction
 from typing import get_type_hints
 
 import pytest
@@ -14,6 +15,7 @@ from kuberoute_gateway.backends import (
 
 def test_backend_contract_uses_transport_independent_types() -> None:
     hints = get_type_hints(ChatBackend.complete)
+    assert iscoroutinefunction(ChatBackend.complete)
     assert hints["request"] is NormalizedChatRequest
     assert hints["return"] is ModelOutput
 

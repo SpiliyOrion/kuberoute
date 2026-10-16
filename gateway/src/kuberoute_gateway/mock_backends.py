@@ -4,14 +4,14 @@ from kuberoute_gateway.backends import ModelOutput, NormalizedChatRequest
 
 
 class MockSmallBackend:
-    def complete(self, request: NormalizedChatRequest) -> ModelOutput:
+    async def complete(self, request: NormalizedChatRequest) -> ModelOutput:
         user_messages = [message.content for message in request.messages if message.role == "user"]
         prompt = user_messages[-1] if user_messages else ""
         return ModelOutput(content=f"mock-small: {prompt}")
 
 
 class MockLargeBackend:
-    def complete(self, request: NormalizedChatRequest) -> ModelOutput:
+    async def complete(self, request: NormalizedChatRequest) -> ModelOutput:
         user_messages = [message.content for message in request.messages if message.role == "user"]
         prompt = user_messages[-1] if user_messages else ""
         return ModelOutput(
