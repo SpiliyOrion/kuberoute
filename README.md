@@ -13,7 +13,8 @@ They return deterministic responses for testing and do not run an LLM.
 The gateway package also defines a minimal chat completion request/response schema, a
 transport-independent backend contract, and an in-memory model registry. Requests require a
 nonempty model ID and at least one system, user, or assistant message with string content.
-Temperature is optional and must be between 0 and 2. Streaming is limited to `false`;
+Temperature is optional and must be between 0 and 2. Optional `seed` fixes sampling and
+`max_tokens` caps generated tokens. Streaming is limited to `false`;
 unsupported fields (including tools) and message formats return HTTP 422. Unknown model IDs
 return HTTP 404. Unexpected backend failures return HTTP 500 with a generic message.
 
@@ -114,6 +115,84 @@ docker compose up --build -d
 Compose forwards these variables only when set in the host environment, along with optional
 `KUBEROUTE_REMOTE_API_KEY` and `KUBEROUTE_REMOTE_DEADLINE_SECONDS`. The container does not
 start or download an external model server.
+
+## Compare inference latency
+
+The benchmark CLI compares direct Ollama `/api/chat` with KubeRoute
+`/v1/chat/completions`. Start Ollama and the gateway with the same model, then run each mode
+from the repository root in PowerShell:
+
+```powershell
+python -m kuberoute_gateway.benchmark --mode direct --model qwen3:0.6b --warmup 2 --requests 10 --concurrency 1
+python -m kuberoute_gateway.benchmark --mode gateway --model qwen3:0.6b --warmup 2 --requests 10 --concurrency 1
+```
+
+For Qwen3 runs where the token limit may be spent on reasoning, request no thinking in
+**both** modes:
+
+```powershell
+python -m kuberoute_gateway.benchmark --mode direct --model qwen3:0.6b --disable-thinking --warmup 2 --requests 10 --concurrency 1
+python -m kuberoute_gateway.benchmark --mode gateway --model qwen3:0.6b --disable-thinking --warmup 2 --requests 10 --concurrency 1
+```
+
+The direct request sends Ollama's native `think: false`. The gateway accepts the optional
+`reasoning_effort: "none"` field and forwards it to the remote OpenAI-compatible chat endpoint.
+Without `--disable-thinking`, neither request includes a thinking control, preserving each
+endpoint's default. Use this flag only with a model and Ollama version that support both
+controls; confirm parity with a small trial before interpreting benchmark comparisons.
+The gateway container must also be configured with `KUBEROUTE_REMOTE_BASE_URL` and
+`KUBEROUTE_REMOTE_MODEL_ID` so `/v1/models` lists the selected model.
+
+To reproduce the Docker gateway path on Windows with Ollama running on the host, start the
+container and verify model registration before the paired commands above:
+
+```powershell
+$env:KUBEROUTE_REMOTE_BASE_URL = "http://host.docker.internal:11434"
+$env:KUBEROUTE_REMOTE_MODEL_ID = "qwen3:0.6b"
+docker compose up --build -d
+Invoke-RestMethod http://127.0.0.1:8000/v1/models
+```
+
+In the first repeated local experiment, four runs in direct–gateway–gateway–direct order
+each used two warm-ups and ten measured requests. Qwen3:0.6b ran with concurrency 1,
+thinking disabled, temperature 0, seed 42, and a 32-token output limit. All 40 measured
+requests succeeded. Mean request-completion latency across 20 measured requests per path was
+70.54 ms for direct Ollama and 116.97 ms for the Docker gateway, a 46.43 ms difference.
+This is a **path-level comparison**, not an isolated measure of gateway overhead: the paths
+use different Ollama endpoints, and the gateway path also crosses the published container
+port and performs request handling and remote forwarding. Hardware, model load state,
+background work, and run order can change the result; repeat both modes under the same
+conditions and inspect output-token counts and finish reasons before comparing latency.
+
+The defaults are one warm-up, five measured requests, 120 seconds per request, and concurrency
+one. Use `--prompt`, `--temperature`, `--seed`, `--max-output-tokens`, `--timeout-seconds`,
+`--ollama-url`, `--gateway-url`, and `--output-dir` to configure a run. The CLI limits
+concurrency to four, measured requests to 100, and output tokens to 128. It does not start
+either server or run automatically during tests.
+
+Each invocation creates a timestamped directory under the ignored `benchmark-results/` root.
+`metadata.json` records the configuration and applied options, `requests.csv` is flushed after
+every request so interrupted runs retain completed rows, and `summary.json` contains p50, p95,
+mean successful-request latency, successful requests per second, timeouts, and error rate.
+Warm-ups are recorded but excluded from the summary. Failed requests count toward the error
+rate but not latency percentiles.
+HTTP errors retain their status; HTTP 200 responses with empty content are labeled
+`empty_content`, or `length_exhausted` when the finish reason is `length`. Results record
+finish reason, token counts when available, and whether native Ollama returned a separate
+thinking field. They do not store generated text or reasoning content.
+
+Both modes use the same model, prompt, zero-temperature default, fixed seed (42), 32-token
+output limit, and non-streaming requests. The direct Ollama API names these controls
+`options.temperature`, `options.seed`, and `options.num_predict`; Ollama's OpenAI-compatible
+endpoint names them `temperature`, `seed`, and `max_tokens`. KubeRoute forwards the latter
+unchanged. Run metadata records both the requested values and wire parameter names. The
+gateway response includes upstream token usage when supplied, so per-request results record
+output-token counts in both modes when available.
+
+This aligns the requested controls, but the two Ollama endpoints may still differ in response
+serialization, internal handling, and token accounting, and KubeRoute adds an HTTP hop.
+Keep the model loaded, use the same hardware and background workload, run the modes in both
+orders, and compare recorded output-token counts and finish reasons before interpreting latency.
 
 ## Test
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -36,6 +37,9 @@ def test_remote_success_passes_request_and_reads_completion() -> None:
             "model": "remote-model",
             "messages": [{"role": "user", "content": "Hello"}],
             "temperature": 0.5,
+            "seed": 42,
+            "max_tokens": 32,
+            "reasoning_effort": "none",
             "stream": False,
         }
         assert request.extensions["timeout"] == {
@@ -56,7 +60,7 @@ def test_remote_success_passes_request_and_reads_completion() -> None:
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {"total_tokens": 4},
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
             },
         )
 
@@ -65,7 +69,12 @@ def test_remote_success_passes_request_and_reads_completion() -> None:
             backend = OpenAICompatibleBackend(
                 "https://models.example", "remote-model", "test-key", client
             )
-            assert (await backend.complete(_request())).content == "Remote reply"
+            output = await backend.complete(
+                replace(_request(), seed=42, max_tokens=32, reasoning_effort="none")
+            )
+            assert output.content == "Remote reply"
+            assert output.prompt_tokens == 2
+            assert output.output_tokens == 2
 
     asyncio.run(run())
 
