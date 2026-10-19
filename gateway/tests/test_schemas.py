@@ -15,11 +15,35 @@ def test_request_accepts_supported_messages_and_options() -> None:
                 {"role": "assistant", "content": "Hi"},
             ],
             "temperature": 0.5,
+            "seed": 42,
+            "max_tokens": 32,
             "stream": False,
         }
     )
     assert request.stream is False
     assert request.messages[1].content == "Hello"
+    assert request.seed == 42
+    assert request.max_tokens == 32
+
+
+def test_request_omits_optional_generation_controls_by_default() -> None:
+    request = ChatCompletionRequest.model_validate(
+        {"model": "local-small", "messages": [{"role": "user", "content": "Hello"}]}
+    )
+    assert request.seed is None
+    assert request.max_tokens is None
+    assert request.reasoning_effort is None
+
+
+def test_request_accepts_opt_in_no_thinking() -> None:
+    request = ChatCompletionRequest.model_validate(
+        {
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "reasoning_effort": "none",
+        }
+    )
+    assert request.reasoning_effort == "none"
 
 
 @pytest.mark.parametrize(
@@ -31,6 +55,12 @@ def test_request_accepts_supported_messages_and_options() -> None:
         {"messages": [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]},
         {"temperature": -0.1},
         {"temperature": 2.1},
+        {"seed": -1},
+        {"seed": True},
+        {"max_tokens": 0},
+        {"max_tokens": 4097},
+        {"max_tokens": 3.5},
+        {"reasoning_effort": "low"},
         {"stream": True},
         {"tools": []},
     ],

@@ -94,3 +94,37 @@ def test_backend_failure_returns_safe_error(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.status_code == 500
     assert response.json() == {"detail": "Model inference failed"}
     assert "secret internal failure" not in response.text
+
+
+def test_gateway_passes_generation_controls_and_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[NormalizedChatRequest] = []
+
+    async def complete(request: NormalizedChatRequest) -> ModelOutput:
+        observed.append(request)
+        return ModelOutput(content="Four", prompt_tokens=6, output_tokens=2)
+
+    monkeypatch.setattr(registry.get("mock-small"), "complete", complete)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "mock-small",
+                "messages": [{"role": "user", "content": "2 + 2?"}],
+                "temperature": 0,
+                "seed": 42,
+                "max_tokens": 32,
+                "reasoning_effort": "none",
+            },
+        )
+    assert response.status_code == 200
+    assert observed[0].temperature == 0
+    assert observed[0].seed == 42
+    assert observed[0].max_tokens == 32
+    assert observed[0].reasoning_effort == "none"
+    assert response.json()["usage"] == {
+        "prompt_tokens": 6,
+        "completion_tokens": 2,
+        "total_tokens": 8,
+    }

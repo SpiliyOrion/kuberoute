@@ -23,6 +23,7 @@ from kuberoute_gateway.schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompletionUsage,
 )
 
 
@@ -76,7 +77,9 @@ def list_models() -> dict[str, object]:
     }
 
 
-@app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+@app.post(
+    "/v1/chat/completions", response_model=ChatCompletionResponse, response_model_exclude_none=True
+)
 async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """Run a non-streaming chat completion on the selected model."""
     try:
@@ -91,6 +94,9 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
             for message in request.messages
         ),
         temperature=request.temperature,
+        seed=request.seed,
+        max_tokens=request.max_tokens,
+        reasoning_effort=request.reasoning_effort,
     )
     try:
         output = await backend.complete(normalized)
@@ -105,6 +111,15 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
                     finish_reason=output.finish_reason,
                 )
             ],
+            usage=(
+                ChatCompletionUsage(
+                    prompt_tokens=output.prompt_tokens,
+                    completion_tokens=output.output_tokens,
+                    total_tokens=output.prompt_tokens + output.output_tokens,
+                )
+                if output.prompt_tokens is not None and output.output_tokens is not None
+                else None
+            ),
         )
     except BackendTimeoutError as exc:
         raise HTTPException(status_code=504, detail="Upstream model timed out") from exc

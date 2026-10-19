@@ -15,12 +15,17 @@ class NormalizedChatRequest:
     model: str
     messages: tuple[ChatInputMessage, ...]
     temperature: float | None = None
+    seed: int | None = None
+    max_tokens: int | None = None
+    reasoning_effort: Literal["none"] | None = None
 
 
 @dataclass(frozen=True)
 class ModelOutput:
     content: str
     finish_reason: Literal["stop", "length"] = "stop"
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class ChatBackend(Protocol):

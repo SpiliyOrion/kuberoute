@@ -39,8 +39,14 @@ class _UpstreamChoice(BaseModel):
     finish_reason: Literal["stop", "length"]
 
 
+class _UpstreamUsage(BaseModel):
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+
+
 class _UpstreamCompletion(BaseModel):
     choices: list[_UpstreamChoice] = Field(min_length=1, max_length=1)
+    usage: _UpstreamUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,12 @@ class OpenAICompatibleBackend:
         }
         if request.temperature is not None:
             payload["temperature"] = request.temperature
+        if request.seed is not None:
+            payload["seed"] = request.seed
+        if request.max_tokens is not None:
+            payload["max_tokens"] = request.max_tokens
+        if request.reasoning_effort is not None:
+            payload["reasoning_effort"] = request.reasoning_effort
 
         try:
             assert self._client is not None
@@ -150,4 +162,10 @@ class OpenAICompatibleBackend:
         except (ValueError, ValidationError) as exc:
             raise BackendResponseError("Upstream model returned an invalid response") from exc
         choice = completion.choices[0]
-        return ModelOutput(content=choice.message.content, finish_reason=choice.finish_reason)
+        usage = completion.usage
+        return ModelOutput(
+            content=choice.message.content,
+            finish_reason=choice.finish_reason,
+            prompt_tokens=usage.prompt_tokens if usage is not None else None,
+            output_tokens=usage.completion_tokens if usage is not None else None,
+        )
