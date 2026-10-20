@@ -89,8 +89,8 @@ Unknown URLs use the fixed `unmatched` route label. `/metrics` requests are not
 instrumented. Metrics contain no URLs with user-supplied path segments, prompts,
 responses, API keys, or request bodies. The endpoint has no authentication, so
 keep gateway access private as in the local Docker and Kubernetes examples.
-Metrics are local to each gateway process or Pod; this phase does not aggregate
-replicas or provide Prometheus deployment configuration.
+Metrics are local to each gateway process or Pod. The [local Prometheus setup](docs/kubernetes_prometheus.md)
+discovers and scrapes each gateway Pod independently without changing the gateway API.
 
 ## Prerequisites
 

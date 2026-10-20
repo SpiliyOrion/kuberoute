@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuberoute-prometheus
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: kuberoute-gateway
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              own_namespace: true
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app, __meta_kubernetes_pod_container_port_name]
+            separator: ;
+            regex: kuberoute-gateway;http
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_phase]
+            regex: Running
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuberoute-prometheus
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuberoute-prometheus-pod-reader
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuberoute-prometheus-pod-reader
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: kuberoute-prometheus
+    namespace: default
+roleRef:
+  kind: Role
+  name: kuberoute-prometheus-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuberoute-prometheus
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kuberoute-prometheus
+  template:
+    metadata:
+      labels:
+        app: kuberoute-prometheus
+    spec:
+      serviceAccountName: kuberoute-prometheus
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: quay.io/prometheus/prometheus:v3.13.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=6h
+            - --storage.tsdb.retention.size=256MB
+            - --web.listen-address=:9090
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: kuberoute-prometheus
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuberoute-prometheus
+  namespace: default
+  labels:
+    app: kuberoute-prometheus
+spec:
+  type: ClusterIP
+  selector:
+    app: kuberoute-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP
