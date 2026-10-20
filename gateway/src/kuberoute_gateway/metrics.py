@@ -26,6 +26,20 @@ IN_PROGRESS = Gauge(
     registry=METRICS_REGISTRY,
 )
 
+INFERENCE_REQUESTS = Counter(
+    "kuberoute_inference_requests_total",
+    "Completed backend inference calls.",
+    ("model", "backend_kind", "policy", "outcome"),
+    registry=METRICS_REGISTRY,
+)
+INFERENCE_DURATION = Histogram(
+    "kuberoute_inference_duration_seconds",
+    "Time spent executing a backend inference call in seconds.",
+    ("model", "backend_kind", "policy", "outcome"),
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
+    registry=METRICS_REGISTRY,
+)
+
 _KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
 
