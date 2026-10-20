@@ -21,6 +21,7 @@ from kuberoute_gateway.remote_backend import (
     OpenAICompatibleBackend,
     remote_config_from_env,
 )
+from kuberoute_gateway.routing import NoEligibleModelError, select_model
 from kuberoute_gateway.schemas import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -44,6 +45,7 @@ def create_registry() -> ModelRegistry:
                 config.api_key,
                 deadline_seconds=config.deadline_seconds,
             ),
+            auto_eligible=True,
         )
     return models
 
@@ -91,14 +93,17 @@ def list_models() -> dict[str, object]:
     "/v1/chat/completions", response_model=ChatCompletionResponse, response_model_exclude_none=True
 )
 async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
-    """Run a non-streaming chat completion on the selected model."""
+    """Select a model, then run one non-streaming chat completion."""
     try:
-        backend = registry.get(request.model)
+        decision = select_model(request.model, registry)
+        backend = registry.get(decision.model_id)
+    except NoEligibleModelError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except UnknownModelError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown model: {request.model}") from exc
 
     normalized = NormalizedChatRequest(
-        model=request.model,
+        model=decision.model_id,
         messages=tuple(
             ChatInputMessage(role=message.role, content=message.content)
             for message in request.messages
@@ -113,7 +118,7 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid4().hex}",
             created=int(datetime.now(timezone.utc).timestamp()),
-            model=request.model,
+            model=decision.model_id,
             choices=[
                 ChatCompletionChoice(
                     index=0,
