@@ -15,7 +15,7 @@ class NoEligibleModelError(LookupError):
 @dataclass(frozen=True)
 class RoutingDecision:
     model_id: str
-    policy: Literal["explicit", "first_eligible"]
+    policy: Literal["explicit", "first_eligible", "performance_v1"]
 
 
 def select_model(requested_model_id: str, registry: ModelRegistry) -> RoutingDecision:
