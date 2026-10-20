@@ -88,7 +88,7 @@ enable its WSL 2 backend, and start Docker Desktop. From the repository root in 
 
 ```powershell
 docker build -t kuberoute-gateway:local .
-docker run --rm -d --name kuberoute-gateway -p 8000:8000 kuberoute-gateway:local
+docker run --rm -d --name kuberoute-gateway -p 127.0.0.1:8000:8000 kuberoute-gateway:local
 docker inspect --format '{{.State.Health.Status}}' kuberoute-gateway
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8000/health/live
