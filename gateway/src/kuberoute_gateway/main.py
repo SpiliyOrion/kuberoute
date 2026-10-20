@@ -1,6 +1,6 @@
 """HTTP entry point for KubeRoute."""
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import AsyncIterator
@@ -25,7 +25,7 @@ from kuberoute_gateway.remote_backend import (
     BackendResponseError,
     BackendTimeoutError,
     OpenAICompatibleBackend,
-    remote_config_from_env,
+    remote_configs_from_env,
 )
 from kuberoute_gateway.routing import NoEligibleModelError, select_model
 from kuberoute_gateway.schemas import (
@@ -41,16 +41,19 @@ def create_registry() -> ModelRegistry:
     models = ModelRegistry()
     models.register("mock-small", MockSmallBackend())
     models.register("mock-large", MockLargeBackend())
-    config = remote_config_from_env()
-    if config is not None:
-        models.register(
-            config.model_id,
-            OpenAICompatibleBackend(
+    for config in remote_configs_from_env():
+        try:
+            backend = OpenAICompatibleBackend(
                 config.base_url,
                 config.model_id,
                 config.api_key,
                 deadline_seconds=config.deadline_seconds,
-            ),
+            )
+        except ValueError:
+            raise ValueError("Remote model configuration is invalid") from None
+        models.register(
+            config.model_id,
+            backend,
             auto_eligible=True,
         )
     return models
@@ -59,21 +62,25 @@ def create_registry() -> ModelRegistry:
 registry = create_registry()
 
 
+async def _close_remote_backend(backend: OpenAICompatibleBackend) -> None:
+    try:
+        await backend.close()
+    except Exception:
+        raise RuntimeError("Remote backend shutdown failed") from None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    remote = None
-    for model_id in registry.model_ids():
-        backend = registry.get(model_id)
-        if isinstance(backend, OpenAICompatibleBackend):
-            remote = backend
-            break
-    if remote is not None:
-        await remote.start()
-    try:
+    async with AsyncExitStack() as stack:
+        for model_id in registry.model_ids():
+            backend = registry.get(model_id)
+            if isinstance(backend, OpenAICompatibleBackend):
+                stack.push_async_callback(_close_remote_backend, backend)
+                try:
+                    await backend.start()
+                except Exception:
+                    raise RuntimeError("Remote backend initialization failed") from None
         yield
-    finally:
-        if remote is not None:
-            await remote.close()
 
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)

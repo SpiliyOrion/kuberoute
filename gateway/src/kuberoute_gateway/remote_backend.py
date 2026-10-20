@@ -1,9 +1,11 @@
 """Async adapter for an opt-in OpenAI-compatible model server."""
 
 import asyncio
+import json
 import math
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Literal
 
 import httpx
@@ -51,10 +53,106 @@ class _UpstreamCompletion(BaseModel):
 
 @dataclass(frozen=True)
 class RemoteModelConfig:
-    base_url: str
+    base_url: str = field(repr=False)
     model_id: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     deadline_seconds: float | None = None
+
+
+_MULTI_CONFIG_ENV = "KUBEROUTE_REMOTE_MODELS_JSON"
+_LEGACY_CONFIG_ENVS = (
+    "KUBEROUTE_REMOTE_BASE_URL",
+    "KUBEROUTE_REMOTE_MODEL_ID",
+    "KUBEROUTE_REMOTE_API_KEY",
+    "KUBEROUTE_REMOTE_DEADLINE_SECONDS",
+)
+_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*\Z")
+_ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_MAX_REMOTE_MODELS = 8
+
+
+def remote_configs_from_env() -> tuple[RemoteModelConfig, ...]:
+    """Read ordered multi-model config or the unchanged legacy single-model config."""
+    raw = os.environ.get(_MULTI_CONFIG_ENV)
+    if raw is None:
+        legacy = remote_config_from_env()
+        return (legacy,) if legacy is not None else ()
+    if any(name in os.environ for name in _LEGACY_CONFIG_ENVS):
+        raise ValueError("Use either multi-model or legacy remote configuration, not both")
+    if len(raw) > 16_384:
+        raise ValueError("Multi-model configuration exceeds the size limit")
+    try:
+        entries = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError("Multi-model configuration must be valid JSON") from None
+    if not isinstance(entries, list) or not 1 <= len(entries) <= _MAX_REMOTE_MODELS:
+        raise ValueError("Multi-model configuration must contain 1 to 8 models")
+
+    configs: list[RemoteModelConfig] = []
+    seen_ids: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or not {"model_id", "base_url"} <= entry.keys():
+            raise ValueError("Each remote model requires model_id and base_url")
+        if entry.keys() - {"model_id", "base_url", "deadline_seconds", "api_key_env"}:
+            raise ValueError("Remote model configuration contains unsupported fields")
+
+        model_id = entry["model_id"]
+        if (
+            not isinstance(model_id, str)
+            or not 1 <= len(model_id) <= 128
+            or not _MODEL_ID_PATTERN.fullmatch(model_id)
+        ):
+            raise ValueError("Remote model ID must be 1 to 128 safe characters")
+        if model_id in ("auto", "mock-small", "mock-large"):
+            raise ValueError("Remote model ID is reserved")
+        if model_id in seen_ids:
+            raise ValueError("Remote model IDs must be unique")
+        seen_ids.add(model_id)
+
+        base_url = entry["base_url"]
+        if not isinstance(base_url, str) or not base_url or len(base_url) > 2048:
+            raise ValueError("Remote model base URL is invalid")
+        try:
+            url = httpx.URL(base_url)
+            valid_url = (
+                url.scheme in ("http", "https")
+                and bool(url.host)
+                and not url.userinfo
+                and not url.query
+                and not url.fragment
+            )
+        except (ValueError, httpx.InvalidURL):
+            raise ValueError("Remote model base URL is invalid") from None
+        if not valid_url:
+            raise ValueError("Remote model base URL is invalid")
+
+        deadline = entry.get("deadline_seconds")
+        if "deadline_seconds" in entry:
+            if (
+                isinstance(deadline, bool)
+                or not isinstance(deadline, (int, float))
+                or not 0 < deadline <= 3600
+                or not math.isfinite(deadline)
+            ):
+                raise ValueError("Remote model deadline must be between 0 and 3600 seconds")
+            deadline = float(deadline)
+
+        api_key = None
+        if "api_key_env" in entry:
+            name = entry["api_key_env"]
+            if (
+                not isinstance(name, str)
+                or not 1 <= len(name) <= 128
+                or not _ENV_NAME_PATTERN.fullmatch(name)
+                or name in (*_LEGACY_CONFIG_ENVS, _MULTI_CONFIG_ENV)
+            ):
+                raise ValueError("Remote model API-key environment reference is invalid")
+            api_key = os.environ.get(name)
+            if not api_key:
+                raise ValueError("Referenced remote model API-key environment variable is unset")
+
+        configs.append(RemoteModelConfig(base_url, model_id, api_key, deadline))
+    return tuple(configs)
 
 
 def remote_config_from_env() -> RemoteModelConfig | None:
@@ -70,8 +168,8 @@ def remote_config_from_env() -> RemoteModelConfig | None:
     if raw_deadline is not None:
         try:
             deadline = float(raw_deadline)
-        except ValueError as exc:
-            raise ValueError("KUBEROUTE_REMOTE_DEADLINE_SECONDS must be positive") from exc
+        except ValueError:
+            raise ValueError("KUBEROUTE_REMOTE_DEADLINE_SECONDS must be positive") from None
         if not math.isfinite(deadline) or deadline <= 0:
             raise ValueError("KUBEROUTE_REMOTE_DEADLINE_SECONDS must be positive")
     return RemoteModelConfig(
@@ -91,7 +189,10 @@ class OpenAICompatibleBackend:
         client: httpx.AsyncClient | None = None,
         deadline_seconds: float | None = None,
     ) -> None:
-        url = httpx.URL(base_url)
+        try:
+            url = httpx.URL(base_url)
+        except httpx.InvalidURL:
+            raise ValueError("Remote model base URL must be an absolute HTTP(S) URL") from None
         if url.scheme not in ("http", "https") or not url.host:
             raise ValueError("Remote model base URL must be an absolute HTTP(S) URL")
         if not model_id:
