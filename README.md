@@ -98,8 +98,8 @@ the localhost-only published port. Different model entries may also use differen
 backend; `model: "auto"` selects the first configured real backend. No scoring, retries, or
 fallback are performed. Each backend has its own reusable HTTP client, even when two models
 share one server. The existing single-model variables still work when JSON is unset.
-Two-model routing has been tested with mocked upstream responses; the local live test used only
-the installed `qwen3:0.6b` model, so two installed real LLMs have not yet been tested together.
+Multi-model routing has been tested with mocked upstream responses and with sequential live
+requests to `qwen3:0.6b`, `llama3.2:3b`, and `gemma3:4b` through a temporary local gateway.
 
 ## Automatic model selection
 
@@ -122,6 +122,59 @@ the current policy selects the first registered one without retries or fallback.
 This is deterministic policy-based routing, not latency-adaptive, load-aware,
 quality-aware, or prompt-classifying routing. It does not query Prometheus on
 the request path.
+
+### Experimental performance policy foundation
+
+`performance_policy.py` defines a pure, **opt-in** policy for a later milestone.
+The running gateway does not call it: explicit IDs still select exactly that model,
+and `auto` still selects the first eligible configured real backend. The policy
+accepts ordered eligible model IDs, immutable recent snapshots, fixed
+configuration, and a caller-supplied decision index. The future integration
+must pass IDs from trusted registry eligibility metadata, not infer backend
+type from model names; rejecting the built-in mock IDs is only a defensive
+check. The policy does not read Prometheus, contact Ollama, or execute inference.
+
+For each model, a rolling window retains at most 32 completed attempts by
+default (configurable from 1 to 128). Each attempt stores only a fixed outcome
+(`success`, `error`, or `timeout`) and, for successes, backend latency in
+seconds. Snapshots expose completed, successful, failed (including timed-out),
+and timed-out attempt counts and recent successful latencies. At most eight
+eligible models are accepted, matching the current multi-remote configuration
+limit. No prompts, responses, credentials, URLs, or request identifiers enter
+the policy state or decision.
+
+A model is scoreable after three completed attempts and at least one success
+by default. Its score is `median(successful latency) / success_rate ** failure_penalty`,
+where `success_rate = successes / completed attempts` and the default penalty is
+1. Lower scores win; ties use eligible registration order. When no healthy
+candidate is scored, an under-sampled model with the fewest attempts is chosen.
+Otherwise, every fourth decision can sample an under-sampled model. Once all
+candidates are scored, every sixteenth decision probes a currently losing,
+non-failure-heavy model in registration-order rotation. This lets slower models
+receive fresh observations and recover if their performance improves.
+
+After the minimum sample count, a model with at least 50% failed attempts in
+its recent window is failure-heavy. While a healthier scored model exists, it
+is excluded from normal ranking and receives at most one round-robin probe
+every 64 decisions. With no healthier scored candidate, the policy balances
+unsampled models or periodically probes other failure-heavy models; with only
+one model it selects that model. In these cases it cannot avoid choosing a
+potentially failing backend. It does not retry or fall back. The exploration
+intervals and failure threshold are configurable. A future integration must
+supply a monotonically increasing decision index and record completed backend
+calls. This module has no runtime counter or background work.
+
+Raw latency depends on whether a model was loaded, prompt and output length,
+GPU contention, and other local conditions. The policy cannot identify a cold
+Ollama model from latency alone. It does not assess response quality or handle
+prompt-specific suitability, and a short rolling window is not a statistically
+reliable model ranking. Before enabling it for live traffic, connect only the
+selected registered model's completed backend outcomes and durations to a
+bounded window, coordinate concurrent updates and decision indices, define how
+state is maintained across gateway Pods, and validate exploration and quality
+limits with controlled measurements. A poor scored candidate is probed only
+periodically, so improvement may take many requests to become visible. Do not
+infer a global ranking from the initial live smoke-test timings.
 
 ## HTTP metrics
 
