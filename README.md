@@ -59,11 +59,47 @@ invalid responses return HTTP 502 without exposing upstream details. Mock models
 work without an external server. Streaming, adaptive routing, retrieval, and deployment
 integrations are future work.
 
-The gateway shares one HTTP client across remote requests and closes it when the app stops.
+The gateway reuses one HTTP client per configured remote backend and closes owned clients when
+the app stops.
 Set `KUBEROUTE_REMOTE_DEADLINE_SECONDS` to a positive number for a total request deadline;
 it includes the upstream HTTP exchange and response validation. The adapter accepts exactly
 one upstream choice with an assistant text message and a `stop` or `length` finish reason.
 Other finish reasons and multiple choices return HTTP 502.
+
+To configure multiple real models, use `KUBEROUTE_REMOTE_MODELS_JSON` instead of the four
+legacy variables above. It is an ordered JSON array with 1 to 8 entries. Each entry requires
+`model_id` (1 to 128 safe characters) and an HTTP(S) `base_url`; it may include a numeric
+`deadline_seconds` greater than 0 and at most 3600, and `api_key_env` naming an already-set
+environment variable containing an API key. The key itself must not appear in the JSON.
+Legacy configuration variable names are not valid key references in this mode. For Compose,
+pass any referenced key variables into the container separately through an appropriate local
+secret or environment configuration.
+Credential-bearing URLs and URL query strings are rejected. Duplicate IDs, `auto`, and the
+built-in mock IDs are also rejected. Setting any legacy remote variable alongside the JSON
+causes startup to fail with a sanitized error.
+
+For example, after confirming both model names appear in `ollama list`, run this in a fresh
+PowerShell window to use two models served by the same local Ollama instance. The second model
+name is an example; replace it with a model already installed on your machine:
+
+```powershell
+$models = @(
+    @{ model_id = "qwen3:0.6b"; base_url = "http://127.0.0.1:11434" }
+    @{ model_id = "qwen2.5:0.5b"; base_url = "http://127.0.0.1:11434"; deadline_seconds = 60 }
+)
+$env:KUBEROUTE_REMOTE_MODELS_JSON = ConvertTo-Json -InputObject $models -Compress -Depth 4
+uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8000
+```
+
+For Docker Compose, use `http://host.docker.internal:11434` as both base URLs and set the
+same JSON variable before `docker compose up --build -d`; Compose forwards it without changing
+the localhost-only published port. Different model entries may also use different server URLs.
+`/v1/models` lists all configured IDs after the mock IDs. Explicit requests use the named
+backend; `model: "auto"` selects the first configured real backend. No scoring, retries, or
+fallback are performed. Each backend has its own reusable HTTP client, even when two models
+share one server. The existing single-model variables still work when JSON is unset.
+Two-model routing has been tested with mocked upstream responses; the local live test used only
+the installed `qwen3:0.6b` model, so two installed real LLMs have not yet been tested together.
 
 ## Automatic model selection
 
