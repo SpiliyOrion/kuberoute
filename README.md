@@ -114,6 +114,40 @@ keep gateway access private as in the local Docker and Kubernetes examples.
 Metrics are local to each gateway process or Pod. The [local Prometheus setup](docs/kubernetes_prometheus.md)
 discovers and scrapes each gateway Pod independently without changing the gateway API.
 
+### Per-model inference metrics
+
+The same `/metrics` endpoint also exposes `kuberoute_inference_requests_total`
+and the `kuberoute_inference_duration_seconds` Histogram (`_bucket`, `_count`,
+and `_sum`). Both use `model` (the selected registered ID, never `auto`),
+`backend_kind` (`mock`, `remote`, or `other`), `policy` (`explicit` or
+`first_eligible`), and `outcome` (`success`, `timeout`, or `error`). The built-in
+mock models are labeled `mock`; exclude them from real inference analysis.
+`other` covers additional backend implementations. A selected backend call
+produces one count and one duration observation, including when it fails.
+Selection failures (HTTP 404 or 503) do not execute a backend and do not create
+inference samples. These labels never contain prompts, responses, exceptions,
+request IDs, or upstream URLs.
+
+Prometheus scrapes each gateway Pod separately. These PromQL examples combine
+replicas and consider only successful remote calls for latency:
+
+```promql
+sum by (model) (rate(kuberoute_inference_requests_total{backend_kind="remote"}[5m]))
+sum by (model, outcome) (rate(kuberoute_inference_requests_total{backend_kind="remote"}[5m]))
+sum by (model) (rate(kuberoute_inference_requests_total{backend_kind="remote",outcome=~"timeout|error"}[5m])) / sum by (model) (rate(kuberoute_inference_requests_total{backend_kind="remote"}[5m]))
+sum by (model) (rate(kuberoute_inference_duration_seconds_sum{backend_kind="remote",outcome="success"}[5m])) / sum by (model) (rate(kuberoute_inference_duration_seconds_count{backend_kind="remote",outcome="success"}[5m]))
+histogram_quantile(0.95, sum by (le, model) (rate(kuberoute_inference_duration_seconds_bucket{backend_kind="remote",outcome="success"}[5m])))
+```
+
+The queries show requests per second, outcome rates, failure rate, mean
+successful-call duration, and p95 successful-call duration, respectively. A
+short observation window with no calls may produce no result. Backend duration
+starts immediately before `backend.complete` and includes upstream transport
+and response processing; it excludes gateway routing, request validation, and
+response serialization. The HTTP duration metric covers the whole gateway
+request and therefore measures a different interval. Neither metric isolates
+the model server's internal generation time.
+
 ## Prerequisites
 
 - Python 3.11+

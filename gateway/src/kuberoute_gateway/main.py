@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import AsyncIterator
 from uuid import uuid4
 
@@ -10,7 +11,12 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
-from kuberoute_gateway.metrics import METRICS_REGISTRY, HTTPMetricsMiddleware
+from kuberoute_gateway.metrics import (
+    INFERENCE_DURATION,
+    INFERENCE_REQUESTS,
+    METRICS_REGISTRY,
+    HTTPMetricsMiddleware,
+)
 from kuberoute_gateway.mock_backends import MockLargeBackend, MockSmallBackend
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
@@ -113,8 +119,25 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
         max_tokens=request.max_tokens,
         reasoning_effort=request.reasoning_effort,
     )
+    if isinstance(backend, (MockSmallBackend, MockLargeBackend)):
+        backend_kind = "mock"
+    elif isinstance(backend, OpenAICompatibleBackend):
+        backend_kind = "remote"
+    else:
+        backend_kind = "other"
+    outcome = "error"
+    started = perf_counter()
     try:
-        output = await backend.complete(normalized)
+        try:
+            output = await backend.complete(normalized)
+            outcome = "success"
+        except BackendTimeoutError:
+            outcome = "timeout"
+            raise
+        finally:
+            labels = (decision.model_id, backend_kind, decision.policy, outcome)
+            INFERENCE_REQUESTS.labels(*labels).inc()
+            INFERENCE_DURATION.labels(*labels).observe(perf_counter() - started)
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid4().hex}",
             created=int(datetime.now(timezone.utc).timestamp()),
