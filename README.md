@@ -116,6 +116,77 @@ Compose forwards these variables only when set in the host environment, along wi
 `KUBEROUTE_REMOTE_API_KEY` and `KUBEROUTE_REMOTE_DEADLINE_SECONDS`. The container does not
 start or download an external model server.
 
+## Run on local Docker Desktop Kubernetes
+
+The [local manifest](k8s/gateway.yaml) deploys one gateway replica and an internal
+`ClusterIP` Service on port 8000. It has no Ingress, NodePort, or LoadBalancer. Liveness
+and readiness probes use `/health/live` and `/health/ready`; CPU and memory requests are
+100m/128Mi, with limits of 500m/512Mi. Readiness checks the gateway HTTP service, not
+the availability of optional Ollama inference.
+
+From the repository root in PowerShell, confirm the Docker Desktop context and build the
+current source as the manifest's local image tag. The single-node Docker Desktop **kubeadm**
+cluster uses the Docker image store, so no public registry is needed. The manifest sets
+`imagePullPolicy: Never` to prevent a registry pull. If Docker Desktop is configured with
+the **kind** provisioner instead, its node does not share that image store; load the image
+into the kind node before deploying or use the kubeadm provisioner.
+
+```powershell
+kubectl config current-context  # expect docker-desktop
+kubectl get nodes
+docker build -t kuberoute-gateway:latest .
+docker image inspect kuberoute-gateway:latest
+kubectl apply --dry-run=server --validate=strict -f k8s/gateway.yaml
+```
+
+After reviewing the dry-run result, deploy and check the rollout:
+
+```powershell
+kubectl apply -f k8s/gateway.yaml
+kubectl rollout status deployment/kuberoute-gateway
+kubectl get deployment,pods,service -l app=kuberoute-gateway
+```
+
+The Service is private inside the cluster. For local access, run this in a separate
+PowerShell window; `--address 127.0.0.1` keeps the forwarded port on the host loopback
+interface. Port 18000 avoids a conflict with a Compose gateway already using port 8000.
+
+```powershell
+kubectl port-forward --address 127.0.0.1 service/kuberoute-gateway 18000:8000
+```
+
+Then check `http://127.0.0.1:18000/health`, `/health/live`, `/health/ready`, and
+`/v1/models` with `Invoke-RestMethod` in another window. Stop port-forward with Ctrl+C.
+Rebuild the same image tag and run `kubectl rollout restart deployment/kuberoute-gateway`
+when updating an existing local deployment.
+
+Remote Ollama is opt-in. For Ollama on the Windows host, set the existing environment
+variables on the Deployment, then wait for its new pod. No host address or model ID is
+embedded in application code or the manifest:
+
+```powershell
+kubectl set env deployment/kuberoute-gateway KUBEROUTE_REMOTE_BASE_URL=http://host.docker.internal:11434 KUBEROUTE_REMOTE_MODEL_ID=qwen3:0.6b
+kubectl rollout status deployment/kuberoute-gateway
+Invoke-RestMethod http://127.0.0.1:18000/v1/models
+```
+
+To verify remote inference through the forwarded Kubernetes Service, send a short
+non-streaming request. The returned `choices[0].message.content` should be nonempty,
+with model `qwen3:0.6b` and finish reason `stop` or `length`:
+
+```powershell
+$body = @{ model = "qwen3:0.6b"; messages = @(@{ role = "user"; content = "Say hello briefly." }); stream = $false; temperature = 0; seed = 42; max_tokens = 64; reasoning_effort = "none" } | ConvertTo-Json -Depth 5
+$result = Invoke-RestMethod -Uri http://127.0.0.1:18000/v1/chat/completions -Method Post -ContentType application/json -Body $body
+$result.choices[0]
+```
+
+The host Ollama service must be reachable from the pod at that address. For a server
+requiring an API key, provide `KUBEROUTE_REMOTE_API_KEY` through a Kubernetes Secret;
+keep credentials out of the manifest and Git. An optional
+`KUBEROUTE_REMOTE_DEADLINE_SECONDS` can also be set on the Deployment. With both required
+remote variables omitted, the gateway registers only its mock models; setting just one
+causes startup to fail.
+
 ## Compare inference latency
 
 The benchmark CLI compares direct Ollama `/api/chat` with KubeRoute
