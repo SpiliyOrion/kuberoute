@@ -65,6 +65,33 @@ it includes the upstream HTTP exchange and response validation. The adapter acce
 one upstream choice with an assistant text message and a `stop` or `length` finish reason.
 Other finish reasons and multiple choices return HTTP 502.
 
+## HTTP metrics
+
+The gateway serves Prometheus text metrics at `GET /metrics`. From PowerShell,
+query a locally running gateway without changing its network exposure:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/metrics | Select-Object -ExpandProperty Content
+```
+
+For the local Kubernetes Service, first run
+`kubectl port-forward --address 127.0.0.1 service/kuberoute-gateway 18000:8000`
+in another PowerShell window, then query `http://127.0.0.1:18000/metrics`.
+Stop the port-forward with Ctrl+C afterward.
+
+- `kuberoute_http_requests_total` counts completed HTTP requests by `method`,
+  normalized `route`, and `status_code`.
+- `kuberoute_http_request_duration_seconds` is a Histogram with the same labels;
+  its `_bucket`, `_count`, and `_sum` samples describe request duration.
+- `kuberoute_http_requests_in_progress` is an unlabeled Gauge for active HTTP requests.
+
+Unknown URLs use the fixed `unmatched` route label. `/metrics` requests are not
+instrumented. Metrics contain no URLs with user-supplied path segments, prompts,
+responses, API keys, or request bodies. The endpoint has no authentication, so
+keep gateway access private as in the local Docker and Kubernetes examples.
+Metrics are local to each gateway process or Pod; this phase does not aggregate
+replicas or provide Prometheus deployment configuration.
+
 ## Prerequisites
 
 - Python 3.11+
