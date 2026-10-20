@@ -6,8 +6,11 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
+from kuberoute_gateway.metrics import METRICS_REGISTRY, HTTPMetricsMiddleware
 from kuberoute_gateway.mock_backends import MockLargeBackend, MockSmallBackend
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
@@ -66,6 +69,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
+app.add_middleware(HTTPMetricsMiddleware)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    """Expose gateway HTTP metrics in Prometheus text format."""
+    return Response(generate_latest(METRICS_REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/v1/models")
