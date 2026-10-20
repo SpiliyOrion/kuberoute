@@ -65,6 +65,28 @@ it includes the upstream HTTP exchange and response validation. The adapter acce
 one upstream choice with an assistant text message and a `stop` or `length` finish reason.
 Other finish reasons and multiple choices return HTTP 502.
 
+## Automatic model selection
+
+Set `model` to `auto` in the existing chat completion endpoint to select an
+eligible configured inference backend. For example, after configuring the
+remote backend above, run this from PowerShell:
+
+```powershell
+$body = @{ model = "auto"; messages = @(@{ role = "user"; content = "Hello" }); stream = $false } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -ContentType application/json -Body $body
+```
+
+The response's `model` field contains the selected model ID, not `auto`.
+Explicit model IDs still select exactly that model and keep their existing
+HTTP errors. `auto` is a reserved selector, so it is not listed by `/v1/models`
+and cannot be used as a registered model ID. The configured remote backend is
+eligible; mock backends are not. If no real backend is configured, `auto`
+returns HTTP 503 instead of using a mock. With multiple eligible backends,
+the current policy selects the first registered one without retries or fallback.
+This is deterministic policy-based routing, not latency-adaptive, load-aware,
+quality-aware, or prompt-classifying routing. It does not query Prometheus on
+the request path.
+
 ## HTTP metrics
 
 The gateway serves Prometheus text metrics at `GET /metrics`. From PowerShell,
