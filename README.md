@@ -640,6 +640,48 @@ of overlap. At most 100 files can be supplied per call; each file is limited to
 10,000 chunks. Empty, malformed, and unsupported inputs raise sanitized errors.
 Keep source documents private; this module does not log or save their text.
 
+### Local embeddings and vector search
+
+Phase 9B adds an optional async Ollama `/api/embed` adapter and an in-memory,
+exact cosine-similarity index. Install an embedding model yourself before using
+it; `nomic-embed-text` is a suggested starting point (`ollama list` to check,
+`ollama pull nomic-embed-text` only if you choose to download it). The model and
+server URL are supplied by the caller, not fixed in the application.
+
+```python
+import asyncio
+from pathlib import Path
+
+from kuberoute_gateway.rag import (
+    InMemoryVectorIndex,
+    OllamaEmbeddingProvider,
+    ingest_paths,
+)
+
+
+async def main():
+    chunks = ingest_paths([Path("synthetic-note.txt")])
+    async with OllamaEmbeddingProvider("http://127.0.0.1:11434", "nomic-embed-text") as provider:
+        index = InMemoryVectorIndex(provider.model_id)
+        await index.add_chunks(chunks, provider, batch_size=16)
+        results = await index.search("What does the note describe?", provider, top_k=3)
+        for result in results:
+            print(result.chunk_id, result.score)
+
+
+asyncio.run(main())
+```
+
+The adapter sends batches of up to 32 texts with `truncate: false`; oversized
+inputs fail rather than being silently truncated. Document and query embeddings
+must use the same configured model and dimension. Results include the chunk
+text, source ID, index, and minimal metadata for downstream retrieval, but text
+is excluded from object representations and error messages. The index holds at
+most 10,000 chunks in process memory, has deterministic tie-breaking, and loses
+its contents when the process exits. Search is exact and linear in index size;
+there is no persistence, API endpoint, hybrid search, or reranking yet. Keep
+source documents and search results private, and do not log them.
+
 ## Test
 
 ```bash
