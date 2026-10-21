@@ -453,6 +453,103 @@ serialization, internal handling, and token accounting, and KubeRoute adds an HT
 Keep the model loaded, use the same hardware and background workload, run the modes in both
 orders, and compare recorded output-token counts and finish reasons before interpreting latency.
 
+## Evaluate fixed and adaptive routing
+
+The separate evaluation CLI compares five **gateway** strategies: `fixed_qwen3`,
+`fixed_llama3_2`, `fixed_gemma3`, `performance_v1`, and the optional
+`first_eligible` baseline. It uses the [versioned synthetic tasks](gateway/src/kuberoute_gateway/evaluation_tasks.py)
+in the same deterministic order for every strategy. Four tasks request an exact
+single-letter answer and are scored strictly against that letter; one open-ended
+task has no automatic quality score. These harmless tasks check basic behavior,
+not general model quality or suitability for real users.
+
+Configure the gateway's three remote models as described above, then start a
+single gateway process bound to localhost. Set
+`KUBEROUTE_AUTO_ROUTING_POLICY=performance_v1` **before** starting it for the
+adaptive run. The fixed strategies explicitly name their model and work under
+either policy. Run each strategy separately from PowerShell, for example:
+
+```powershell
+python -m kuberoute_gateway.evaluation --strategy fixed_qwen3 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+python -m kuberoute_gateway.evaluation --strategy fixed_llama3_2 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+python -m kuberoute_gateway.evaluation --strategy fixed_gemma3 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+python -m kuberoute_gateway.evaluation --strategy performance_v1 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+```
+
+For the optional baseline, stop that gateway, set
+`$env:KUBEROUTE_AUTO_ROUTING_POLICY = "first_eligible"`, restart the **same**
+three-model configuration, then run:
+
+```powershell
+python -m kuberoute_gateway.evaluation --strategy first_eligible --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+```
+
+The chat API does not report the active automatic policy. For either automatic
+strategy, the CLI reads `/metrics` before and after the run and requires remote
+inference counter increments to match **every** successful warm-up and measured
+request's selected model and declared policy. A missing or malformed metrics
+endpoint, observed counter reset, extra inference traffic, or policy mismatch
+invalidates the run: it exits nonzero, marks metadata `invalid`, and writes no comparison
+summary. If any request fails, completed rows and a diagnostic summary remain,
+but the run is marked `completed_with_failures` and automatic policy verification
+is `unverified_due_to_request_failures`; the CLI exits nonzero. Use one gateway
+process and avoid unrelated inference traffic. Aggregate metrics cannot prove
+per-request attribution across multiple processes. **Restart the gateway before
+every independent adaptive trial** so its in-memory rolling window and decision
+index reset. Separate Pods do not share state, so a load-balanced Service is
+unsuitable for this first evaluation.
+
+The default run uses two warm-ups, ten measured requests, 64 output tokens,
+and a 180-second timeout. Runs are sequential and capped at 20 warm-ups and
+100 measured requests. All paths request non-streaming generation with
+temperature 0, seed 42, and `reasoning_effort="none"`; confirm these controls
+work for the configured model server. The gateway forwards `max_tokens` as the
+output-token limit. Use the same settings and task-set version across trials.
+Adaptive warm-up requests are real inference calls and update the policy's
+rolling history and decision index; measured adaptive decisions therefore
+begin from the warm-up state.
+
+Each invocation writes `metadata.json`, checkpointed `requests.csv`, and
+`summary.json` under ignored `evaluation-results/`. You may choose another
+directory with `--output-dir`; keep it private and Git-ignored. Metadata stores
+the task-set version, task IDs, requested strategy, counts, and generation
+settings, but omits the gateway URL and prompt text. Each request row stores
+phase, sequence, task ID/category, requested and actual model, HTTP status,
+bounded error category, end-to-end latency, optional reported token counts,
+finish reason, nonempty-content flag, and correctness where strictly gradable.
+Generated text, exception details, and credentials are never written. Warm-ups
+are recorded but excluded from measured latency and accuracy aggregates. The
+metadata starts as `in_progress` and becomes `completed`,
+`completed_with_failures`, `invalid`, or `interrupted`. Interrupted runs retain
+flushed CSV rows but have no completed comparison summary.
+
+The summary reports success/failure rates, mean/p50/p95 latency of successful
+measured requests, selected-model counts, bounded error counts, and exact-letter
+accuracy where applicable. Nonempty responses ending at the generation limit
+are marked `generation_length` and excluded from success and correctness; empty
+responses distinguish `empty_content` from `length_exhausted`. Token-adjusted
+throughput is the sum of **reported** output tokens divided by the summed
+end-to-end latency of successful requests with usage data. The summary reports
+successful-request count, usage-covered count, and usage-coverage fraction; a
+partial-coverage rate applies only to that subset. Missing token counts are
+never estimated. This throughput is not isolated model token-generation speed.
+Latency percentiles use only successful measured requests and linear
+interpolation over their sorted latencies; the latency sample count is explicit.
+Failures and timeouts appear separately in counts and bounded error categories.
+In particular, p95 from 20 or fewer requests is unstable.
+
+For an initial controlled run, start with six warm-ups and 20 measured requests
+per strategy, then repeat in a rotated strategy order. Confirm all three models
+are resident before comparing steady-state latency, or report first-load costs
+separately. Compare output-token counts and finish reasons: a shorter response
+can make a path appear faster. Adaptive warm-up and ongoing exploration add
+cost, so report them separately from later selections. Fixed versus automatic
+requests share the gateway path, but changing model choice, GPU contention, and
+response length still confound a pure routing-overhead estimate. More repetitions
+and a broader task set are needed before making performance or quality claims.
+Repeating the same four graded questions increases request observations, not
+independent evidence of broad model quality.
+
 ## Test
 
 ```bash
