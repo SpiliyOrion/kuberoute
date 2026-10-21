@@ -457,11 +457,17 @@ orders, and compare recorded output-token counts and finish reasons before inter
 
 The separate evaluation CLI compares five **gateway** strategies: `fixed_qwen3`,
 `fixed_llama3_2`, `fixed_gemma3`, `performance_v1`, and the optional
-`first_eligible` baseline. It uses the [versioned synthetic tasks](gateway/src/kuberoute_gateway/evaluation_tasks.py)
-in the same deterministic order for every strategy. Four tasks request an exact
-single-letter answer and are scored strictly against that letter; one open-ended
-task has no automatic quality score. These harmless tasks check basic behavior,
-not general model quality or suitability for real users.
+`first_eligible` baseline. `--task-set-version 1` is the default and preserves
+the original [five synthetic tasks](gateway/src/kuberoute_gateway/evaluation_tasks.py),
+their IDs, keys, order, and modulo repetition. Four request an exact single-letter
+answer; one open-ended task has no automatic quality score. Select
+`--task-set-version 2` for [60 distinct A/B/C tasks](gateway/src/kuberoute_gateway/evaluation_tasks_v2.py)
+in arithmetic, numerical comparison, logical reasoning, string operations, and
+reading comprehension. Each category has 12 tasks with four answers in each
+letter position. The fixed category-interleaved order gives the first 15 tasks
+three per category and five each of A/B/C. V2 uses each task at most once;
+`--requests` above 60 fails before creating an output directory. Neither task
+set measures general model quality or suitability for real users.
 
 Evaluation output schema version 2 adds a separate conservative choice grade.
 The existing `correct` field and `objective_accuracy` still mean **exact-format**
@@ -486,6 +492,16 @@ python -m kuberoute_gateway.evaluation --strategy fixed_qwen3 --gateway-url http
 python -m kuberoute_gateway.evaluation --strategy fixed_llama3_2 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
 python -m kuberoute_gateway.evaluation --strategy fixed_gemma3 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
 python -m kuberoute_gateway.evaluation --strategy performance_v1 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 20 --max-output-tokens 64 --timeout-seconds 180
+```
+
+These examples retain the v1 default. For a small v2 pilot, add
+`--task-set-version 2 --requests 15` to **each** strategy command; for the
+entire v2 set, use `--task-set-version 2 --requests 60`. Keep strategy settings
+and task count identical within a comparison. For example:
+
+```powershell
+python -m kuberoute_gateway.evaluation --strategy fixed_qwen3 --task-set-version 2 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 15 --max-output-tokens 64 --timeout-seconds 180
+python -m kuberoute_gateway.evaluation --strategy performance_v1 --task-set-version 2 --gateway-url http://127.0.0.1:8000 --warmup 6 --requests 15 --max-output-tokens 64 --timeout-seconds 180
 ```
 
 For the optional baseline, stop that gateway, set
@@ -513,7 +529,7 @@ unsuitable for this first evaluation.
 
 The default run uses two warm-ups, ten measured requests, 64 output tokens,
 and a 180-second timeout. Runs are sequential and capped at 20 warm-ups and
-100 measured requests. All paths request non-streaming generation with
+100 measured requests for v1, or 60 distinct measured requests for v2. All paths request non-streaming generation with
 temperature 0, seed 42, and `reasoning_effort="none"`; confirm these controls
 work for the configured model server. The gateway forwards `max_tokens` as the
 output-token limit. Use the same settings and task-set version across trials.
@@ -524,14 +540,18 @@ begin from the warm-up state.
 Each invocation writes `metadata.json`, checkpointed `requests.csv`, and
 `summary.json` under ignored `evaluation-results/`. You may choose another
 directory with `--output-dir`; keep it private and Git-ignored. Metadata stores
-the task-set version, task IDs, requested strategy, counts, and generation
-settings, but omits the gateway URL and prompt text. Each request row stores
+the task-set version, ordered full-set task IDs, ordered measured task IDs,
+a SHA-256 fingerprint of the full task definitions, requested strategy, counts,
+and generation settings, but omits the gateway URL and prompt text. The fingerprint
+helps identify task-definition changes; it is not a privacy guarantee or a
+substitute for a source revision. Each request row stores
 phase, sequence, task ID/category, requested and actual model, HTTP status,
 bounded error category, end-to-end latency, optional reported token counts,
 finish reason, nonempty-content flag, exact-format correctness, and the bounded
 choice status where gradable. Metadata and summaries record schema version `2`
-and grading version `exact-plus-choice-v2`; the task-set version remains `1`
-because its prompts and expected choices did not change. Earlier schema-1 runs
+and grading version `exact-plus-choice-v2` for both task sets. The task-set
+version is `1` or `2` according to the selected source tasks; scoring version
+is independent of task-set version. Earlier schema-1 runs
 remain untouched and cannot be rescored without their deliberately unsaved
 response text. Keep grading versions separate when comparing results.
 Generated text, exception details, and credentials are never written. Warm-ups
@@ -552,8 +572,18 @@ graded requests with one identified choice; identification accuracy is the
 correct fraction **among identified choices only**. Read accuracy alongside
 coverage: low coverage can make identified-choice accuracy misleading. Neither
 score establishes semantic reasoning quality or a reliable model ranking.
-Adaptive routing optimizes observed performance, not answer quality. The four
-repeated synthetic questions are not independent evidence of model quality.
+Adaptive routing optimizes observed performance, not answer quality. Repeating
+v1's four graded questions is not independent evidence of model quality. V2
+adds task variety without making the questions a comprehensive reasoning or
+semantic-quality benchmark. Logic and reading keys have source-level rationales;
+arithmetic, comparison, and string keys are checked with deterministic reference
+operations in automated tests. Model responses are still graded only by the
+existing exact-letter and conservative explicit-choice rules.
+Compare model-selection distributions alongside grades: an adaptive score is a
+mixture of the models it chose for those tasks, not a fixed model's score. Each
+strategy needs the same balanced task prefix and generation controls to make
+that comparison interpretable. Pilot results from 15 tasks are especially
+sensitive to individual questions and should not be extrapolated to all 60.
 
 Token-adjusted throughput is the sum of **reported** output tokens divided by
 the summed end-to-end latency of successful requests with usage data. The summary reports
@@ -573,9 +603,11 @@ can make a path appear faster. Adaptive warm-up and ongoing exploration add
 cost, so report them separately from later selections. Fixed versus automatic
 requests share the gateway path, but changing model choice, GPU contention, and
 response length still confound a pure routing-overhead estimate. More repetitions
-and a broader task set are needed before making performance or quality claims.
-Repeating the same four graded questions increases request observations, not
-independent evidence of broad model quality.
+and more representative tasks are needed before making performance or quality
+claims. V2's 60 distinct tasks reduce within-run repetition but remain a small,
+synthetic set with possible wording and format bias. Results from different task
+sets or grading versions must be reported separately; historical v1 artifacts
+are never reinterpreted as v2 results.
 
 ## Test
 

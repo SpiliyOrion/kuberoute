@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import math
 import re
@@ -27,6 +28,7 @@ from kuberoute_gateway.evaluation_tasks import (
     EvaluationTask,
     task_for_sequence,
 )
+from kuberoute_gateway.evaluation_tasks_v2 import TASK_SET_V2_VERSION, TASKS_V2
 from kuberoute_gateway.schemas import ChatCompletionResponse
 
 Strategy = Literal[
@@ -78,10 +80,13 @@ class EvaluationConfig:
     max_output_tokens: int = 64
     timeout_seconds: float = 180.0
     output_dir: Path = Path("evaluation-results")
+    task_set_version: Literal["1", "2"] = "1"
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGY_MODELS:
             raise ValueError("Evaluation strategy is invalid")
+        if self.task_set_version not in (TASK_SET_VERSION, TASK_SET_V2_VERSION):
+            raise ValueError("Task-set version must be 1 or 2")
         if (
             isinstance(self.warmup, bool)
             or not isinstance(self.warmup, int)
@@ -91,6 +96,8 @@ class EvaluationConfig:
             or not 1 <= self.requests <= 100
         ):
             raise ValueError("Warm-up must be 0 to 20 and measured requests 1 to 100")
+        if self.task_set_version == TASK_SET_V2_VERSION and self.requests > len(TASKS_V2):
+            raise ValueError("Task-set version 2 allows at most 60 measured requests")
         if (
             isinstance(self.max_output_tokens, bool)
             or not isinstance(self.max_output_tokens, int)
@@ -372,13 +379,24 @@ async def run_evaluation(
     config: EvaluationConfig, client: httpx.AsyncClient | None = None
 ) -> tuple[Path, dict[str, object]]:
     """Write each completed row immediately so interrupted runs keep evidence."""
+    task_set = TASKS if config.task_set_version == TASK_SET_VERSION else TASKS_V2
+    measured_tasks = (
+        [task_for_sequence(sequence) for sequence in range(config.requests)]
+        if config.task_set_version == TASK_SET_VERSION
+        else list(task_set[: config.requests])
+    )
+    task_set_bytes = json.dumps(
+        [asdict(task) for task in task_set], sort_keys=True, ensure_ascii=True
+    ).encode("utf-8")
     run_dir = config.output_dir / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
     run_dir.mkdir(parents=True, exist_ok=False)
     metadata = {
         "schema_version": OUTPUT_SCHEMA_VERSION,
         "grading_version": GRADING_VERSION,
-        "task_set_version": TASK_SET_VERSION,
-        "task_ids": [task.task_id for task in TASKS],
+        "task_set_version": config.task_set_version,
+        "task_ids": [task.task_id for task in task_set],
+        "measured_task_ids": [task.task_id for task in measured_tasks],
+        "task_set_sha256": hashlib.sha256(task_set_bytes).hexdigest(),
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "strategy": config.strategy,
         "requested_model": config.requested_model,
@@ -424,9 +442,9 @@ async def run_evaluation(
                 writer.writerow(result.csv_row())
                 output.flush()
             measured: list[EvaluationResult] = []
-            for sequence in range(config.requests):
+            for sequence, task in enumerate(measured_tasks):
                 result = await measure_evaluation_request(
-                    client, config, task_for_sequence(sequence), "measurement", sequence
+                    client, config, task, "measurement", sequence
                 )
                 measured.append(result)
                 writer.writerow(result.csv_row())
@@ -475,6 +493,7 @@ async def run_evaluation(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate fixed and automatic gateway routing")
     parser.add_argument("--strategy", choices=tuple(STRATEGY_MODELS), required=True)
+    parser.add_argument("--task-set-version", choices=("1", "2"), default="1")
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8000")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--requests", type=int, default=10)
