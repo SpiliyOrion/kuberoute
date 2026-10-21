@@ -609,6 +609,37 @@ synthetic set with possible wording and format bias. Results from different task
 sets or grading versions must be reported separately; historical v1 artifacts
 are never reinterpreted as v2 results.
 
+## Local document ingestion (RAG foundation)
+
+The `kuberoute_gateway.rag` module loads explicitly named local UTF-8 `.txt` and
+`.md` files and splits their normalized text into ordered, overlapping chunks.
+It does not scan directories, call a model, or change the gateway API.
+
+```python
+from pathlib import Path
+
+from kuberoute_gateway.rag import ChunkingConfig, ingest_paths
+
+chunks = ingest_paths(
+    [Path("synthetic-note.txt"), Path("synthetic-guide.md")],
+    config=ChunkingConfig(size=800, overlap=120),
+)
+for chunk in chunks:
+    print(chunk.source_id, chunk.chunk_id, chunk.index)
+```
+
+The source ID is a SHA-256 digest of the resolved local path, so it stays stable
+for the same file location but changes if the file moves. Chunk IDs also depend
+on normalized document content, chunk settings, and order. Metadata contains
+only the file extension and byte count, not the path. Newlines, Unicode, and
+trailing whitespace are normalized deterministically; the splitter prefers
+word boundaries but may split a long word. Overlap is bounded by the configured
+character count. The defaults are 800 characters per chunk and 120 characters
+of overlap. At most 100 files can be supplied per call; each file is limited to
+1 MiB by default (configurable up to 10 MiB), and each document is limited to
+10,000 chunks. Empty, malformed, and unsupported inputs raise sanitized errors.
+Keep source documents private; this module does not log or save their text.
+
 ## Test
 
 ```bash
