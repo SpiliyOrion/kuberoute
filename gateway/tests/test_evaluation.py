@@ -11,11 +11,14 @@ import httpx
 import kuberoute_gateway.evaluation as evaluation
 import pytest
 from kuberoute_gateway.evaluation import (
+    GRADING_VERSION,
     MODEL_IDS,
+    OUTPUT_SCHEMA_VERSION,
     RESULT_FIELDS,
     EvaluationConfig,
     EvaluationResult,
     EvaluationVerificationError,
+    classify_answer_choice,
     measure_evaluation_request,
     run_evaluation,
     summarize_evaluation,
@@ -96,6 +99,101 @@ def test_tasks_are_versioned_unique_and_scored_only_when_objective() -> None:
     assert all(task.expected_choice in ("A", "B", "C", None) for task in TASKS)
 
 
+@pytest.mark.parametrize(
+    ("content", "expected", "status"),
+    [
+        ("B", "B", "correct"),
+        (" b. ", "B", "correct"),
+        ("(B)", "B", "correct"),
+        ("Answer: B", "B", "correct"),
+        ("answer : b!", "B", "correct"),
+        ("Option B", "B", "correct"),
+        ("The correct answer is B.", "B", "correct"),
+        ("The answer is B.", "B", "correct"),
+        ("Answer: A", "B", "incorrect"),
+        ("option c.", "B", "incorrect"),
+        ("(c)", "B", "incorrect"),
+        ("Answer: B. A short explanation follows.", "B", "ambiguous"),
+        ("Answer: B. Option A is also possible.", "B", "ambiguous"),
+        ("B. Actually C is correct.", "B", "ambiguous"),
+        ("Answer: B. I choose C.", "B", "ambiguous"),
+        ("Answer: B. Final answer is C.", "B", "ambiguous"),
+        ("Answer: B, but maybe C.", "B", "ambiguous"),
+        ("B. C.", "B", "ambiguous"),
+        ("B, A", "B", "ambiguous"),
+        ("Answer: B or C", "B", "ambiguous"),
+        ("Answer: B, C", "B", "ambiguous"),
+        ("Answer: B (A)", "B", "ambiguous"),
+        ("The letters A and B appear in the question.", "B", "ambiguous"),
+        ("Because the sum is 5.", "B", "ambiguous"),
+        ("5", "B", "ambiguous"),
+        ("I choose B", "B", "ambiguous"),
+        ("B is a vitamin", "B", "ambiguous"),
+        ("B", "D", "ambiguous"),
+        ("", "B", "ambiguous"),
+        ("Answer: B. " + "private explanation " * 50, "B", "ambiguous"),
+        (" " * 513 + "B", "B", "ambiguous"),
+    ],
+)
+def test_choice_classifier_accepts_only_unambiguous_explicit_choices(
+    content: str, expected: str, status: str
+) -> None:
+    assert classify_answer_choice(content, expected) == status
+
+
+@pytest.mark.parametrize(
+    ("content", "strict_correct", "choice_status"),
+    [
+        ("B", True, "correct"),
+        ("Answer: B.", False, "correct"),
+        ("Option A", False, "incorrect"),
+        ("Answer: B or C", False, "ambiguous"),
+    ],
+)
+def test_strict_and_choice_grades_are_independent_and_response_stays_private(
+    content: str, strict_correct: bool, choice_status: str
+) -> None:
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=completion(content=content))
+            )
+        ) as client:
+            result = await measure_evaluation_request(
+                client, EvaluationConfig(strategy="fixed_qwen3"), TASKS[0], "measurement", 0
+            )
+        assert result.correct is strict_correct
+        assert result.choice_status == choice_status
+        assert "Answer:" not in str(result.csv_row())
+        assert "Option" not in str(result.csv_row())
+
+    asyncio.run(run())
+
+
+def test_formatted_choice_is_saved_only_as_bounded_status(tmp_path: Path) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json=completion(content="Answer: B. private generated explanation")
+        )
+
+    async def run() -> None:
+        config = EvaluationConfig(strategy="fixed_qwen3", warmup=0, requests=1, output_dir=tmp_path)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            run_dir, summary = await run_evaluation(config, client)
+        with (run_dir / "requests.csv").open(encoding="utf-8") as output:
+            rows = list(csv.DictReader(output))
+        assert rows[0]["correct"] == "False"
+        assert rows[0]["choice_status"] == "ambiguous"
+        assert summary["objective_accuracy"] == 0.0
+        assert summary["choice_identification_coverage"] == 0.0
+        assert summary["choice_identification_accuracy"] is None
+        artifacts = "".join(path.read_text(encoding="utf-8") for path in run_dir.iterdir())
+        assert "private generated explanation" not in artifacts
+        assert TASKS[0].prompt not in artifacts
+
+    asyncio.run(run())
+
+
 def test_run_writes_separate_warmups_and_safe_checkpointed_outputs(tmp_path: Path) -> None:
     config = EvaluationConfig(strategy="fixed_qwen3", warmup=2, requests=5, output_dir=tmp_path)
     seen: list[str] = []
@@ -125,10 +223,21 @@ def test_run_writes_separate_warmups_and_safe_checkpointed_outputs(tmp_path: Pat
         assert all(row["success"] == "True" for row in rows)
         assert all(row["correct"] == "" for row in rows[:2])
         assert [row["correct"] for row in rows[2:]] == ["True"] * 4 + [""]
+        assert [row["choice_status"] for row in rows] == ["not_applicable"] * 2 + [
+            "correct"
+        ] * 4 + ["not_applicable"]
         assert summary["requests"] == 5
         assert summary["successful_requests"] == 5
         assert summary["objectively_scored_requests"] == 4
         assert summary["objective_accuracy"] == 1.0
+        assert summary["schema_version"] == OUTPUT_SCHEMA_VERSION
+        assert summary["grading_version"] == GRADING_VERSION
+        assert summary["choice_eligible_requests"] == 4
+        assert summary["choice_correct_requests"] == 4
+        assert summary["choice_incorrect_requests"] == 0
+        assert summary["choice_ambiguous_requests"] == 0
+        assert summary["choice_identification_coverage"] == 1.0
+        assert summary["choice_identification_accuracy"] == 1.0
         assert summary["reported_output_tokens"] == 10
         assert summary["requests_with_output_usage"] == 5
         assert summary["output_usage_coverage"] == 1.0
@@ -137,6 +246,8 @@ def test_run_writes_separate_warmups_and_safe_checkpointed_outputs(tmp_path: Pat
         assert metadata["strategy"] == "fixed_qwen3"
         assert metadata["generation_controls"]["reasoning_effort"] == "none"
         assert metadata["task_set_version"] == TASK_SET_VERSION
+        assert metadata["schema_version"] == OUTPUT_SCHEMA_VERSION
+        assert metadata["grading_version"] == GRADING_VERSION
         assert json.loads((run_dir / "summary.json").read_text(encoding="utf-8")) == summary
         artifacts = "".join(path.read_text(encoding="utf-8") for path in run_dir.iterdir())
         assert "private generated output" not in artifacts
@@ -163,6 +274,7 @@ def test_auto_strategy_records_actual_selected_model_and_missing_usage() -> None
         assert result.requested_model == "auto"
         assert result.selected_model == "llama3.2:3b"
         assert result.correct is True
+        assert result.choice_status == "correct"
         assert result.output_tokens is None
         summary = summarize_evaluation(config.strategy, [result])
         assert summary["model_selection_distribution"] == {"llama3.2:3b": 1}
@@ -348,12 +460,35 @@ def test_strict_objective_grading_and_token_throughput() -> None:
         finish_reason="stop",
         content_nonempty=True,
         correct=True,
+        choice_status="correct",
     )
     results = [
         base,
-        replace(base, sequence=1, latency_seconds=3.0, output_tokens=30, correct=False),
-        replace(base, sequence=2, latency_seconds=2.0, output_tokens=None, correct=None),
-        replace(base, sequence=3, success=False, error_category="timeout", selected_model=None),
+        replace(
+            base,
+            sequence=1,
+            latency_seconds=3.0,
+            output_tokens=30,
+            correct=False,
+            choice_status="incorrect",
+        ),
+        replace(
+            base,
+            sequence=2,
+            latency_seconds=2.0,
+            output_tokens=None,
+            correct=None,
+            choice_status="not_applicable",
+        ),
+        replace(
+            base,
+            sequence=3,
+            success=False,
+            error_category="timeout",
+            selected_model=None,
+            correct=None,
+            choice_status="not_applicable",
+        ),
     ]
     summary = summarize_evaluation("fixed_qwen3", results)
     assert summary["requests"] == 4
@@ -363,6 +498,11 @@ def test_strict_objective_grading_and_token_throughput() -> None:
     assert summary["p50_latency_seconds"] == 2.0
     assert summary["p95_latency_seconds"] == pytest.approx(2.9)
     assert summary["objective_accuracy"] == 0.5
+    assert summary["choice_eligible_requests"] == 2
+    assert summary["choice_correct_requests"] == 1
+    assert summary["choice_incorrect_requests"] == 1
+    assert summary["choice_identification_coverage"] == 1.0
+    assert summary["choice_identification_accuracy"] == 0.5
     assert summary["requests_with_output_usage"] == 2
     assert summary["reported_output_tokens"] == 40
     assert summary["token_adjusted_throughput_tokens_per_second"] == 10.0
@@ -372,6 +512,50 @@ def test_strict_objective_grading_and_token_throughput() -> None:
     assert summary["output_usage_coverage"] == pytest.approx(2 / 3)
 
 
+def test_ambiguous_choices_reduce_coverage_without_changing_strict_accuracy() -> None:
+    result = EvaluationResult(
+        phase="measurement",
+        sequence=0,
+        strategy="fixed_qwen3",
+        task_id=TASKS[0].task_id,
+        category=TASKS[0].category,
+        requested_model=MODEL_IDS[0],
+        selected_model=MODEL_IDS[0],
+        http_status=200,
+        success=True,
+        error_category=None,
+        latency_seconds=1.0,
+        prompt_tokens=None,
+        output_tokens=None,
+        finish_reason="stop",
+        content_nonempty=True,
+        correct=False,
+        choice_status="correct",
+    )
+    summary = summarize_evaluation(
+        "fixed_qwen3",
+        [
+            result,
+            replace(result, sequence=1, choice_status="incorrect"),
+            replace(result, sequence=2, choice_status="ambiguous"),
+            replace(result, sequence=3, correct=None, choice_status="not_applicable"),
+        ],
+    )
+    assert summary["objective_accuracy"] == 0.0
+    assert summary["choice_eligible_requests"] == 3
+    assert summary["choice_correct_requests"] == 1
+    assert summary["choice_incorrect_requests"] == 1
+    assert summary["choice_ambiguous_requests"] == 1
+    assert summary["choice_identified_requests"] == 2
+    assert summary["choice_identification_coverage"] == pytest.approx(2 / 3)
+    assert summary["choice_identification_accuracy"] == 0.5
+
+    with pytest.raises(ValueError, match="require a valid choice status"):
+        summarize_evaluation("fixed_qwen3", [replace(result, choice_status="not_applicable")])
+    with pytest.raises(ValueError, match="require a valid choice status"):
+        summarize_evaluation("fixed_qwen3", [replace(result, choice_status="unsupported")])
+
+
 def test_empty_summary_has_no_invented_latency_accuracy_or_usage() -> None:
     summary = summarize_evaluation("performance_v1", [])
     assert summary["requests"] == 0
@@ -379,6 +563,8 @@ def test_empty_summary_has_no_invented_latency_accuracy_or_usage() -> None:
     assert summary["p50_latency_seconds"] is None
     assert summary["p95_latency_seconds"] is None
     assert summary["objective_accuracy"] is None
+    assert summary["choice_identification_coverage"] is None
+    assert summary["choice_identification_accuracy"] is None
     assert summary["token_adjusted_throughput_tokens_per_second"] is None
     assert summary["output_usage_coverage"] is None
 
@@ -431,6 +617,7 @@ def test_failures_and_malformed_responses_are_bounded(
         assert result.success is False
         assert result.error_category == expected_error
         assert result.correct is None
+        assert result.choice_status == "not_applicable"
         assert "private" not in str(result.csv_row())
         assert "unregistered-model" not in str(result.csv_row())
         assert "tool_calls" not in str(result.csv_row())
@@ -501,9 +688,12 @@ def test_interruption_keeps_completed_csv_rows(tmp_path: Path) -> None:
             rows = list(csv.DictReader(output))
         assert len(rows) == 1
         assert rows[0]["sequence"] == "0"
+        assert rows[0]["choice_status"] == "correct"
         assert not (run_dir / "summary.json").exists()
         metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
         assert metadata["run_status"] == "interrupted"
+        assert metadata["schema_version"] == OUTPUT_SCHEMA_VERSION
+        assert metadata["grading_version"] == GRADING_VERSION
 
     asyncio.run(run())
 

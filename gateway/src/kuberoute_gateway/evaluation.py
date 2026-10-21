@@ -5,6 +5,7 @@ import asyncio
 import csv
 import json
 import math
+import re
 import statistics
 import time
 from collections import Counter
@@ -31,6 +32,9 @@ from kuberoute_gateway.schemas import ChatCompletionResponse
 Strategy = Literal[
     "fixed_qwen3", "fixed_llama3_2", "fixed_gemma3", "performance_v1", "first_eligible"
 ]
+ChoiceStatus = Literal["correct", "incorrect", "ambiguous", "not_applicable"]
+OUTPUT_SCHEMA_VERSION = 2
+GRADING_VERSION = "exact-plus-choice-v2"
 MODEL_IDS = ("qwen3:0.6b", "llama3.2:3b", "gemma3:4b")
 STRATEGY_MODELS: dict[Strategy, str] = {
     "fixed_qwen3": MODEL_IDS[0],
@@ -39,6 +43,30 @@ STRATEGY_MODELS: dict[Strategy, str] = {
     "performance_v1": "auto",
     "first_eligible": "auto",
 }
+
+_MAX_CHOICE_TEXT_LENGTH = 512
+_CHOICE_FORMATS = (
+    re.compile(r"([ABC])[.!?]?", re.IGNORECASE),
+    re.compile(r"\(([ABC])\)[.!?]?", re.IGNORECASE),
+    re.compile(
+        r"(?:Answer\s*:\s*|Option\s+|The\s+(?:correct\s+)?answer\s+is\s+)"
+        r"([ABC])[.!?]?",
+        re.IGNORECASE,
+    ),
+)
+
+
+def classify_answer_choice(content: str, expected_choice: str) -> ChoiceStatus:
+    """Identify only bounded, explicitly selected A/B/C answers."""
+    if expected_choice not in {"A", "B", "C"} or len(content) > _MAX_CHOICE_TEXT_LENGTH:
+        return "ambiguous"
+    response = content.strip()
+    if not response:
+        return "ambiguous"
+    for pattern in _CHOICE_FORMATS:
+        if match := pattern.fullmatch(response):
+            return "correct" if match.group(1).upper() == expected_choice else "incorrect"
+    return "ambiguous"
 
 
 @dataclass(frozen=True)
@@ -134,6 +162,7 @@ class EvaluationResult:
     finish_reason: str | None
     content_nonempty: bool
     correct: bool | None
+    choice_status: ChoiceStatus
 
     def csv_row(self) -> dict[str, object]:
         return asdict(self)
@@ -206,7 +235,7 @@ async def measure_evaluation_request(
     phase: Literal["warmup", "measurement"],
     sequence: int,
 ) -> EvaluationResult:
-    """Retain response text only long enough for strict objective grading."""
+    """Retain response text only long enough for both bounded grading methods."""
     started = time.perf_counter()
     status: int | None = None
     selected: str | None = None
@@ -216,6 +245,7 @@ async def measure_evaluation_request(
     output_tokens: int | None = None
     content_nonempty = False
     correct: bool | None = None
+    choice_status: ChoiceStatus = "not_applicable"
     try:
         async with asyncio.timeout(config.timeout_seconds):
             response = await client.post(config.endpoint, json=config.payload(task))
@@ -247,6 +277,7 @@ async def measure_evaluation_request(
                     error = "generation_length"
                 elif task.expected_choice is not None and phase == "measurement":
                     correct = content.strip().upper() == task.expected_choice
+                    choice_status = classify_answer_choice(content, task.expected_choice)
     except (TimeoutError, httpx.TimeoutException):
         error = "timeout"
     except httpx.RequestError:
@@ -270,6 +301,7 @@ async def measure_evaluation_request(
         finish_reason=finish_reason,
         content_nonempty=content_nonempty,
         correct=correct,
+        choice_status=choice_status,
     )
 
 
@@ -280,8 +312,17 @@ def summarize_evaluation(strategy: Strategy, results: list[EvaluationResult]) ->
     with_usage = [item for item in successful if item.output_tokens is not None]
     known_latency = sum(item.latency_seconds for item in with_usage)
     graded = [item for item in successful if item.correct is not None]
+    choice_eligible = graded
+    if any(
+        item.choice_status not in {"correct", "incorrect", "ambiguous"} for item in choice_eligible
+    ):
+        raise ValueError("Successful graded requests require a valid choice status")
+    choice_counts = Counter(item.choice_status for item in choice_eligible)
+    identified_choices = choice_counts["correct"] + choice_counts["incorrect"]
     count = len(results)
     return {
+        "schema_version": OUTPUT_SCHEMA_VERSION,
+        "grading_version": GRADING_VERSION,
         "strategy": strategy,
         "requests": count,
         "successful_requests": len(successful),
@@ -304,6 +345,17 @@ def summarize_evaluation(strategy: Strategy, results: list[EvaluationResult]) ->
         "objective_accuracy": sum(item.correct is True for item in graded) / len(graded)
         if graded
         else None,
+        "choice_eligible_requests": len(choice_eligible),
+        "choice_correct_requests": choice_counts["correct"],
+        "choice_incorrect_requests": choice_counts["incorrect"],
+        "choice_ambiguous_requests": choice_counts["ambiguous"],
+        "choice_identified_requests": identified_choices,
+        "choice_identification_coverage": identified_choices / len(choice_eligible)
+        if choice_eligible
+        else None,
+        "choice_identification_accuracy": choice_counts["correct"] / identified_choices
+        if identified_choices
+        else None,
         "requests_with_output_usage": len(with_usage),
         "output_usage_coverage": len(with_usage) / len(successful) if successful else None,
         "reported_output_tokens": sum(item.output_tokens or 0 for item in with_usage),
@@ -323,7 +375,8 @@ async def run_evaluation(
     run_dir = config.output_dir / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
     run_dir.mkdir(parents=True, exist_ok=False)
     metadata = {
-        "schema_version": 1,
+        "schema_version": OUTPUT_SCHEMA_VERSION,
+        "grading_version": GRADING_VERSION,
         "task_set_version": TASK_SET_VERSION,
         "task_ids": [task.task_id for task in TASKS],
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
