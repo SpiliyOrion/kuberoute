@@ -118,21 +118,29 @@ HTTP errors. `auto` is a reserved selector, so it is not listed by `/v1/models`
 and cannot be used as a registered model ID. The configured remote backend is
 eligible; mock backends are not. If no real backend is configured, `auto`
 returns HTTP 503 instead of using a mock. With multiple eligible backends,
-the current policy selects the first registered one without retries or fallback.
-This is deterministic policy-based routing, not latency-adaptive, load-aware,
-quality-aware, or prompt-classifying routing. It does not query Prometheus on
-the request path.
+the default policy selects the first registered one without retries or fallback.
+By default this is deterministic first-eligible routing, not latency-adaptive,
+load-aware, quality-aware, or prompt-classifying routing. It does not query
+Prometheus on the request path.
 
-### Experimental performance policy foundation
+### Experimental performance-aware automatic routing
 
-`performance_policy.py` defines a pure, **opt-in** policy for a later milestone.
-The running gateway does not call it: explicit IDs still select exactly that model,
-and `auto` still selects the first eligible configured real backend. The policy
-accepts ordered eligible model IDs, immutable recent snapshots, fixed
-configuration, and a caller-supplied decision index. The future integration
-must pass IDs from trusted registry eligibility metadata, not infer backend
-type from model names; rejecting the built-in mock IDs is only a defensive
-check. The policy does not read Prometheus, contact Ollama, or execute inference.
+The default `KUBEROUTE_AUTO_ROUTING_POLICY=first_eligible` keeps the existing
+behavior. To opt in, set the variable before starting the gateway:
+
+```powershell
+$env:KUBEROUTE_AUTO_ROUTING_POLICY = "performance_v1"
+uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8000
+```
+
+Only `model: "auto"` requests use this policy; explicit IDs still select
+exactly the requested backend. An invalid policy value fails startup with a
+sanitized configuration error. The policy receives ordered IDs from the
+registry's auto-eligible **remote** backends, never mock backends. Without an
+eligible remote backend, `auto` returns HTTP 503. There are no retries or
+fallbacks. `performance_policy.py` remains a pure selector: it accepts
+immutable snapshots, fixed configuration, and a decision index, and performs
+no inference or network I/O.
 
 For each model, a rolling window retains at most 32 completed attempts by
 default (configurable from 1 to 128). Each attempt stores only a fixed outcome
@@ -160,21 +168,28 @@ every 64 decisions. With no healthier scored candidate, the policy balances
 unsampled models or periodically probes other failure-heavy models; with only
 one model it selects that model. In these cases it cannot avoid choosing a
 potentially failing backend. It does not retry or fall back. The exploration
-intervals and failure threshold are configurable. A future integration must
-supply a monotonically increasing decision index and record completed backend
-calls. This module has no runtime counter or background work.
+intervals and failure threshold are fixed at their policy defaults in this
+integration; they are configurable through `PerformancePolicyConfig` in code.
+The gateway supplies a monotonically increasing index for automatic adaptive
+decisions and records one outcome after each completed selected backend call.
+Successful calls also record their backend execution duration; failures and
+timeouts record only their outcome. Explicit calls still appear in Prometheus
+metrics but do not train this policy. Cancelled calls add no completed-attempt
+observation. An async lock coordinates selection and feedback, but is never
+held during inference. Concurrent requests may select from the same last
+completed snapshot and initially choose the same model.
 
 Raw latency depends on whether a model was loaded, prompt and output length,
 GPU contention, and other local conditions. The policy cannot identify a cold
 Ollama model from latency alone. It does not assess response quality or handle
 prompt-specific suitability, and a short rolling window is not a statistically
-reliable model ranking. Before enabling it for live traffic, connect only the
-selected registered model's completed backend outcomes and durations to a
-bounded window, coordinate concurrent updates and decision indices, define how
-state is maintained across gateway Pods, and validate exploration and quality
-limits with controlled measurements. A poor scored candidate is probed only
-periodically, so improvement may take many requests to become visible. Do not
-infer a global ranking from the initial live smoke-test timings.
+reliable model ranking. State exists only for one gateway process and resets
+on restart; separate Kubernetes Pods make independent decisions without shared
+observations. The policy is experimental until exploration, quality, and
+failure behavior are validated with controlled workloads. A poor scored
+candidate is probed only periodically, so improvement may take many requests
+to become visible. Do not infer a global ranking from the initial live
+smoke-test timings.
 
 ## HTTP metrics
 
@@ -208,9 +223,10 @@ discovers and scrapes each gateway Pod independently without changing the gatewa
 The same `/metrics` endpoint also exposes `kuberoute_inference_requests_total`
 and the `kuberoute_inference_duration_seconds` Histogram (`_bucket`, `_count`,
 and `_sum`). Both use `model` (the selected registered ID, never `auto`),
-`backend_kind` (`mock`, `remote`, or `other`), `policy` (`explicit` or
-`first_eligible`), and `outcome` (`success`, `timeout`, or `error`). The built-in
-mock models are labeled `mock`; exclude them from real inference analysis.
+`backend_kind` (`mock`, `remote`, or `other`), `policy` (`explicit`,
+`first_eligible`, or opt-in `performance_v1`), and `outcome` (`success`,
+`timeout`, or `error`). The built-in mock models are labeled `mock`; exclude
+them from real inference analysis.
 `other` covers additional backend implementations. A selected backend call
 produces one count and one duration observation, including when it fails.
 Selection failures (HTTP 404 or 503) do not execute a backend and do not create

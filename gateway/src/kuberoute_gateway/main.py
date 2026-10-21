@@ -1,15 +1,17 @@
 """HTTP entry point for KubeRoute."""
 
+import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from kuberoute_gateway.adaptive_routing import AdaptiveRoutingState, auto_routing_policy_from_env
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
 from kuberoute_gateway.metrics import (
     INFERENCE_DURATION,
@@ -18,6 +20,7 @@ from kuberoute_gateway.metrics import (
     HTTPMetricsMiddleware,
 )
 from kuberoute_gateway.mock_backends import MockLargeBackend, MockSmallBackend
+from kuberoute_gateway.performance_policy import InferenceObservation
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
     BackendConnectionError,
@@ -27,7 +30,7 @@ from kuberoute_gateway.remote_backend import (
     OpenAICompatibleBackend,
     remote_configs_from_env,
 )
-from kuberoute_gateway.routing import NoEligibleModelError, select_model
+from kuberoute_gateway.routing import AUTO_MODEL_ID, NoEligibleModelError, select_model
 from kuberoute_gateway.schemas import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -71,16 +74,28 @@ async def _close_remote_backend(backend: OpenAICompatibleBackend) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    async with AsyncExitStack() as stack:
-        for model_id in registry.model_ids():
-            backend = registry.get(model_id)
-            if isinstance(backend, OpenAICompatibleBackend):
-                stack.push_async_callback(_close_remote_backend, backend)
-                try:
-                    await backend.start()
-                except Exception:
-                    raise RuntimeError("Remote backend initialization failed") from None
-        yield
+    policy = auto_routing_policy_from_env()
+    eligible_remote_ids = tuple(
+        model_id
+        for model_id in registry.auto_eligible_model_ids()
+        if isinstance(registry.get(model_id), OpenAICompatibleBackend)
+    )
+    app.state.adaptive_routing = (
+        AdaptiveRoutingState(eligible_remote_ids) if policy == "performance_v1" else None
+    )
+    try:
+        async with AsyncExitStack() as stack:
+            for model_id in registry.model_ids():
+                backend = registry.get(model_id)
+                if isinstance(backend, OpenAICompatibleBackend):
+                    stack.push_async_callback(_close_remote_backend, backend)
+                    try:
+                        await backend.start()
+                    except Exception:
+                        raise RuntimeError("Remote backend initialization failed") from None
+            yield
+    finally:
+        del app.state.adaptive_routing
 
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
@@ -105,10 +120,16 @@ def list_models() -> dict[str, object]:
 @app.post(
     "/v1/chat/completions", response_model=ChatCompletionResponse, response_model_exclude_none=True
 )
-async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
+async def create_chat_completion(
+    request: ChatCompletionRequest, http_request: Request
+) -> ChatCompletionResponse:
     """Select a model, then run one non-streaming chat completion."""
     try:
-        decision = select_model(request.model, registry)
+        adaptive_state: AdaptiveRoutingState | None = http_request.app.state.adaptive_routing
+        if request.model == AUTO_MODEL_ID and adaptive_state is not None:
+            decision = await adaptive_state.select()
+        else:
+            decision = select_model(request.model, registry)
         backend = registry.get(decision.model_id)
     except NoEligibleModelError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -132,7 +153,7 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
         backend_kind = "remote"
     else:
         backend_kind = "other"
-    outcome = "error"
+    outcome: Literal["success", "timeout", "error"] | None = None
     started = perf_counter()
     try:
         try:
@@ -141,10 +162,23 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
         except BackendTimeoutError:
             outcome = "timeout"
             raise
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            outcome = "error"
+            raise
         finally:
-            labels = (decision.model_id, backend_kind, decision.policy, outcome)
-            INFERENCE_REQUESTS.labels(*labels).inc()
-            INFERENCE_DURATION.labels(*labels).observe(perf_counter() - started)
+            if outcome is not None:
+                duration = perf_counter() - started
+                labels = (decision.model_id, backend_kind, decision.policy, outcome)
+                INFERENCE_REQUESTS.labels(*labels).inc()
+                INFERENCE_DURATION.labels(*labels).observe(duration)
+                if adaptive_state is not None and decision.policy == "performance_v1":
+                    observation = InferenceObservation(
+                        outcome,
+                        max(duration, 1e-9) if outcome == "success" else None,
+                    )
+                    await adaptive_state.record(decision.model_id, observation)
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid4().hex}",
             created=int(datetime.now(timezone.utc).timestamp()),
