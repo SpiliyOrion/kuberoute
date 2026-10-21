@@ -463,6 +463,18 @@ single-letter answer and are scored strictly against that letter; one open-ended
 task has no automatic quality score. These harmless tasks check basic behavior,
 not general model quality or suitability for real users.
 
+Evaluation output schema version 2 adds a separate conservative choice grade.
+The existing `correct` field and `objective_accuracy` still mean **exact-format**
+matching: the entire response must equal the expected letter after trimming and
+uppercasing. The new `choice_status` is `correct` or `incorrect` only when one
+unambiguous A/B/C choice appears in a bounded answer format, such as `B`, `B.`,
+`(B)`, `Answer: B`, `Option B`, or `The correct answer is B.` The entire
+response must match one supported format. Explanations, conflicting choices,
+alternatives, unsupported text, and responses over 512 characters are
+`ambiguous`. It does not infer answers from numbers or free-form explanations.
+Warm-ups, ungraded tasks, and failed requests (including empty content) are
+`not_applicable`.
+
 Configure the gateway's three remote models as described above, then start a
 single gateway process bound to localhost. Set
 `KUBEROUTE_AUTO_ROUTING_POLICY=performance_v1` **before** starting it for the
@@ -516,7 +528,12 @@ the task-set version, task IDs, requested strategy, counts, and generation
 settings, but omits the gateway URL and prompt text. Each request row stores
 phase, sequence, task ID/category, requested and actual model, HTTP status,
 bounded error category, end-to-end latency, optional reported token counts,
-finish reason, nonempty-content flag, and correctness where strictly gradable.
+finish reason, nonempty-content flag, exact-format correctness, and the bounded
+choice status where gradable. Metadata and summaries record schema version `2`
+and grading version `exact-plus-choice-v2`; the task-set version remains `1`
+because its prompts and expected choices did not change. Earlier schema-1 runs
+remain untouched and cannot be rescored without their deliberately unsaved
+response text. Keep grading versions separate when comparing results.
 Generated text, exception details, and credentials are never written. Warm-ups
 are recorded but excluded from measured latency and accuracy aggregates. The
 metadata starts as `in_progress` and becomes `completed`,
@@ -527,9 +544,19 @@ The summary reports success/failure rates, mean/p50/p95 latency of successful
 measured requests, selected-model counts, bounded error counts, and exact-letter
 accuracy where applicable. Nonempty responses ending at the generation limit
 are marked `generation_length` and excluded from success and correctness; empty
-responses distinguish `empty_content` from `length_exhausted`. Token-adjusted
-throughput is the sum of **reported** output tokens divided by the summed
-end-to-end latency of successful requests with usage data. The summary reports
+responses distinguish `empty_content` from `length_exhausted`.
+
+The separate choice summary reports explicitly correct, explicitly incorrect,
+and ambiguous counts. Identification coverage is the fraction of successful
+graded requests with one identified choice; identification accuracy is the
+correct fraction **among identified choices only**. Read accuracy alongside
+coverage: low coverage can make identified-choice accuracy misleading. Neither
+score establishes semantic reasoning quality or a reliable model ranking.
+Adaptive routing optimizes observed performance, not answer quality. The four
+repeated synthetic questions are not independent evidence of model quality.
+
+Token-adjusted throughput is the sum of **reported** output tokens divided by
+the summed end-to-end latency of successful requests with usage data. The summary reports
 successful-request count, usage-covered count, and usage-coverage fraction; a
 partial-coverage rate applies only to that subset. Missing token counts are
 never estimated. This throughput is not isolated model token-generation speed.
