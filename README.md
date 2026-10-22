@@ -679,8 +679,72 @@ text, source ID, index, and minimal metadata for downstream retrieval, but text
 is excluded from object representations and error messages. The index holds at
 most 10,000 chunks in process memory, has deterministic tie-breaking, and loses
 its contents when the process exits. Search is exact and linear in index size;
-there is no persistence, API endpoint, hybrid search, or reranking yet. Keep
+there is no persistence, API endpoint, or reranking yet. Keep
 source documents and search results private, and do not log them.
+
+### Hybrid retrieval: BM25, cosine search, and RRF
+
+`BM25Index` matches exact technical terms such as `HTTP 504` and model or
+version identifiers. `HybridRetriever` indexes the same chunks with BM25 and
+the Phase 9B cosine index, then combines their ranked lists using reciprocal
+rank fusion (RRF): `sum(weight / (60 + rank))`, with ranks starting at 1. This
+combines rankings without adding incomparable BM25 and cosine scores. Semantic
+retrieval can find similar wording when exact terms differ; hybrid retrieval
+can use both signals. It is not guaranteed to outperform either method.
+
+This runnable example uses **synthetic files and test-only embeddings**; it
+does not call Ollama or require a downloaded model:
+
+```python
+import asyncio
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from kuberoute_gateway.rag import HybridRetriever, HybridSearchConfig, ingest_paths
+
+
+class DemoEmbeddings:
+    model_id = "demo-embeddings"
+
+    async def embed(self, texts):
+        return tuple(
+            (1.0 + float("timeout" in text.casefold()), 1.0 + float("metrics" in text.casefold()))
+            for text in texts
+        )
+
+
+async def main():
+    with TemporaryDirectory() as directory:
+        folder = Path(directory)
+        (folder / "timeout.md").write_text("HTTP 504 means gateway timeout.", encoding="utf-8")
+        (folder / "metrics.txt").write_text("Prometheus tracks failures.", encoding="utf-8")
+        chunks = ingest_paths([folder / "timeout.md", folder / "metrics.txt"])
+        provider = DemoEmbeddings()
+        retriever = HybridRetriever(provider.model_id)
+        await retriever.add_chunks(chunks, provider)
+        for mode in ("semantic", "lexical", "hybrid"):
+            results = await retriever.search(
+                "How do I monitor timeout failures?",
+                provider if mode != "lexical" else None,
+                config=HybridSearchConfig(mode=mode),
+            )
+            print(mode, [(result.chunk_id, result.fused_score) for result in results])
+
+
+asyncio.run(main())
+```
+
+For real semantic retrieval, replace `DemoEmbeddings` with the
+`OllamaEmbeddingProvider` shown above and install the chosen embedding model
+yourself first. Lexical-only queries do not call the embedding provider. BM25
+uses case-folded Unicode word tokens, preserving dots and colons inside version
+strings; it splits hyphenated words and is not a full tokenizer for every
+language. Its defaults are `k1=1.2` and `b=0.75`; repeated query terms count
+once. Each index holds at most 10,000 chunks. Hybrid candidate lists are
+bounded to 100 per method, and index additions and searches are serialized so
+queries never see a partial update. Retrieval remains in memory; there is no
+reranking, generation endpoint, or quality guarantee. Keep returned passage
+text private.
 
 ## Test
 

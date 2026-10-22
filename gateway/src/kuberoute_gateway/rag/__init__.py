@@ -1,11 +1,19 @@
 """Local document ingestion primitives for future retrieval work."""
 
+from kuberoute_gateway.rag.bm25 import (
+    BM25Index,
+    BM25Result,
+    RetrievalConsistencyError,
+    RetrievalInputError,
+    tokenize,
+)
 from kuberoute_gateway.rag.embeddings import (
     EmbeddingInputError,
     EmbeddingProvider,
     EmbeddingServiceError,
     OllamaEmbeddingProvider,
 )
+from kuberoute_gateway.rag.hybrid import HybridResult, HybridRetriever, HybridSearchConfig
 from kuberoute_gateway.rag.ingestion import (
     Chunk,
     ChunkingConfig,
@@ -21,6 +29,8 @@ from kuberoute_gateway.rag.ingestion import (
 from kuberoute_gateway.rag.vector_index import InMemoryVectorIndex, SearchResult
 
 __all__ = (
+    "BM25Index",
+    "BM25Result",
     "Chunk",
     "ChunkingConfig",
     "Document",
@@ -28,8 +38,13 @@ __all__ = (
     "EmbeddingInputError",
     "EmbeddingProvider",
     "EmbeddingServiceError",
+    "HybridResult",
+    "HybridRetriever",
+    "HybridSearchConfig",
     "InMemoryVectorIndex",
     "OllamaEmbeddingProvider",
+    "RetrievalConsistencyError",
+    "RetrievalInputError",
     "SearchResult",
     "SourceMetadata",
     "chunk_document",
@@ -37,4 +52,5 @@ __all__ = (
     "load_document",
     "load_documents",
     "normalize_text",
+    "tokenize",
 )

@@ -50,6 +50,10 @@ class InMemoryVectorIndex:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def chunk_ids(self) -> frozenset[str]:
+        """Return an identifier snapshot for composite-index consistency checks."""
+        return frozenset(self._entries)
+
     def _check_provider(self, provider: EmbeddingProvider) -> None:
         if provider.model_id != self.model_id:
             raise EmbeddingInputError("Embedding model does not match the index")
