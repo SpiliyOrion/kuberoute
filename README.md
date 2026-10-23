@@ -843,6 +843,71 @@ quality or a general advantage for any mode. Returned markers prove only that
 a passage was supplied: the model can cite an irrelevant passage, and absence
 of citations does not by itself prove that the answer is unsupported or safe.
 
+## Web dashboard (Phase 10A)
+
+The React dashboard provides local, non-streaming multi-turn chat through the
+existing gateway. It discovers models from `/v1/models` and adds **Automatic
+routing** (`model: "auto"`) as a separate selector. Mock models are labeled
+*simulated*; the response shows the backend that actually replied. Automatic
+routing follows the gateway's configured policy and does not promise the
+fastest or highest-quality answer. No chat text is saved between page loads.
+
+**Managed Windows PC (no Node.js required):** GitHub Actions runs the frontend
+lint, tests, and build with Node.js 22 on its runner, then uploads a
+`kuberoute-dashboard-<commit SHA>` build artifact. After a successful workflow
+run for a trusted commit, open that run under the repository's **Actions** tab
+and download its dashboard artifact. GitHub provides it as a ZIP archive;
+extract its contents into the ignored `frontend/dist` directory. From the
+repository root in PowerShell:
+
+```powershell
+$dashboardZip = Join-Path $HOME 'Downloads\kuberoute-dashboard-<commit SHA>.zip'
+New-Item -ItemType Directory -Force frontend\dist | Out-Null
+Expand-Archive -LiteralPath $dashboardZip -DestinationPath frontend\dist -Force
+Test-Path frontend\dist\index.html  # must return True
+```
+
+Download only the artifact from the intended repository and commit. The
+compiled files are static HTML, JavaScript, and CSS; Node.js is needed only on
+the GitHub Actions build runner, not on this PC or at runtime. The generated
+build and `node_modules` are Git-ignored. A fresh workflow build is needed
+after frontend source changes. Artifact availability is limited by the
+workflow's retention period.
+
+Start the gateway from this source checkout in a PowerShell window. The two
+mock backends work without Ollama or model downloads:
+
+```powershell
+python -m pip install -e ".[dev]"
+uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/`, choose `mock-small` or `mock-large`, and send a
+message. FastAPI serves the compiled frontend from the same localhost origin
+as `/v1/models` and `/v1/chat/completions`, so no permissive CORS setting is
+needed. If `frontend/dist/index.html` is absent, `/` remains HTTP 404 and all
+existing API routes remain available. An alternative build location can be
+supplied through `KUBEROUTE_FRONTEND_DIST_DIR`; point it only at a trusted
+extracted dashboard build. Do not bind Uvicorn to a public interface for this
+local workflow. If a real backend is configured through the existing gateway
+environment variables, it also appears in the selector. An unavailable
+gateway shows a discovery error with a retry action.
+
+On an unrestricted development machine, Node.js 22.12 or newer supports an
+optional hot-reload workflow: run `npm ci` and `npm run dev` from `frontend`,
+then open `http://127.0.0.1:5173`. Vite binds to localhost and proxies `/v1`
+to `http://127.0.0.1:8000`. `npm run lint`, `npm run test`, and `npm run build`
+are also available there and run in the frontend CI job. The managed-PC
+workflow above does not use npm locally.
+
+Enter sends and Shift+Enter inserts a newline. New Chat clears browser-memory
+history and cancels an outstanding request. Retry resends the failed request
+without duplicating the user message. Inputs are limited to 4,000 characters;
+each request sends at most the latest 16 messages and 16,000 total characters.
+Older conversation content may therefore be omitted from later inference
+requests. The dashboard has no accounts, persistent history, streaming, RAG
+controls, citations, or public deployment configuration.
+
 ## Test
 
 ```bash

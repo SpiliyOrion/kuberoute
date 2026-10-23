@@ -16,6 +16,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from kuberoute_gateway.adaptive_routing import AdaptiveRoutingState, auto_routing_policy_from_env
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
+from kuberoute_gateway.frontend import router as frontend_router
 from kuberoute_gateway.metrics import (
     INFERENCE_DURATION,
     INFERENCE_REQUESTS,
@@ -162,6 +163,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
 app.add_middleware(HTTPMetricsMiddleware)
+app.include_router(frontend_router)
 
 
 @app.exception_handler(RequestValidationError)
