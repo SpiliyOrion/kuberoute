@@ -43,10 +43,14 @@ an Ingress, NodePort, LoadBalancer, public proxy, or non-local port binding.
 
 The `python_dependencies` CI job audits the dependencies installed from
 `.[dev]` (including the audit tool's own environment) with `pip-audit`. The
-`npm_dependencies` job audits the committed lockfile after `npm ci`, including
-development dependencies; high and critical npm advisories fail that job.
-Lower-severity npm advisories remain visible for review. Neither job upgrades
-packages automatically. Python's broad version ranges and the Docker build
+hosted Python 3.11 runner initially supplied setuptools 79.0.1, which has the
+moderate-severity PYSEC-2026-3447 advisory. The audit job now installs
+setuptools 83.0.0 or newer before scanning; this changes CI tooling, not the
+gateway's runtime requirements. The `npm_dependencies` job audits the committed
+lockfile after `npm ci`, including development dependencies; high and critical
+npm advisories fail that job. Lower-severity npm advisories remain visible for
+review. Neither job rewrites project dependency specifications automatically.
+Python's broad version ranges and the Docker build
 can resolve a different dependency set at another time; a reproducible Python
 lock/SBOM and image scan are future improvements. Audit results reflect the
 advisory databases available at run time, and require applicability review.
