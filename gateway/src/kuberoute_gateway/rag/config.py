@@ -2,7 +2,7 @@
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from kuberoute_gateway.rag.embeddings import validate_model_id
 from kuberoute_gateway.rag.ingestion import MAX_FILES
@@ -10,9 +10,9 @@ from kuberoute_gateway.rag.ingestion import MAX_FILES
 
 @dataclass(frozen=True)
 class RagConfig:
-    paths: tuple[str, ...]
+    paths: tuple[str, ...] = field(repr=False)
     embedding_model: str
-    embedding_base_url: str
+    embedding_base_url: str = field(repr=False)
 
 
 def rag_config_from_env() -> RagConfig | None:

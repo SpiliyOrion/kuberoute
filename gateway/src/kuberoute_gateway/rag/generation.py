@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
 from kuberoute_gateway.rag.embeddings import EmbeddingInputError, EmbeddingProvider, validate_texts
@@ -44,7 +44,7 @@ class SourceReference:
 
 @dataclass(frozen=True)
 class GeneratedAnswer:
-    content: str
+    content: str = field(repr=False)
     model: str
     finish_reason: str
     usage: ChatCompletionUsage | None = None
@@ -52,7 +52,7 @@ class GeneratedAnswer:
 
 @dataclass(frozen=True)
 class RagAnswer:
-    answer: str
+    answer: str = field(repr=False)
     model: str | None
     sources: tuple[SourceReference, ...]
     retrieval_mode: RetrievalMode

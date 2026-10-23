@@ -8,13 +8,15 @@ import kuberoute_gateway.main as gateway_main
 import pytest
 from fastapi.testclient import TestClient
 from kuberoute_gateway.backends import ModelOutput, NormalizedChatRequest
-from kuberoute_gateway.rag.config import rag_config_from_env
+from kuberoute_gateway.rag.config import RagConfig, rag_config_from_env
 from kuberoute_gateway.rag.embeddings import EmbeddingServiceError
 from kuberoute_gateway.rag.generation import (
     ABSTENTION,
     GeneratedAnswer,
+    RagAnswer,
     RagContextError,
     RagGenerationError,
+    SourceReference,
     answer_question,
 )
 from kuberoute_gateway.rag.hybrid import HybridResult
@@ -49,6 +51,31 @@ def _result(index: int, text: str) -> HybridResult:
         metadata=SourceMetadata(".md", 20),
         fused_score=1 / (index + 1),
     )
+
+
+def test_sensitive_rag_values_are_absent_from_default_representations() -> None:
+    path = "C:/synthetic/private-document.md"
+    url = "http://private-embedding-host.invalid:11434"
+    answer_text = "Synthetic confidential answer [1]"
+    config = RagConfig((path,), "synthetic-embed", url)
+    generated = GeneratedAnswer(answer_text, "test-model", "stop")
+    result = RagAnswer(
+        answer_text,
+        "test-model",
+        (SourceReference("[1]", "source-id", "chunk-id", 0),),
+        "hybrid",
+        "stop",
+    )
+    for value, secrets in (
+        (config, (path, url)),
+        (generated, (answer_text,)),
+        (result, (answer_text,)),
+    ):
+        for representation in (repr(value), str(value)):
+            assert all(secret not in representation for secret in secrets)
+    assert config.paths == (path,)
+    assert config.embedding_base_url == url
+    assert generated.content == result.answer == answer_text
 
 
 def test_grounded_prompt_order_citations_and_controls() -> None:
