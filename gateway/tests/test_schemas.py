@@ -1,7 +1,12 @@
 """Validation tests for the supported chat completion subset."""
 
 import pytest
-from kuberoute_gateway.schemas import ChatCompletionRequest, ChatCompletionResponse
+from kuberoute_gateway.schemas import (
+    MAX_CHAT_MESSAGE_CHARS,
+    MAX_CHAT_MESSAGES,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+)
 from pydantic import ValidationError
 
 
@@ -69,6 +74,42 @@ def test_request_rejects_unsupported_or_invalid_input(change: dict[str, object])
     payload: dict[str, object] = {
         "model": "local-small",
         "messages": [{"role": "user", "content": "Hello"}],
+    }
+    payload.update(change)
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest.model_validate(payload)
+
+
+def test_chat_request_size_limits_preserve_valid_boundaries() -> None:
+    request = ChatCompletionRequest.model_validate(
+        {
+            "model": "m" * 128,
+            "messages": [{"role": "user", "content": "x"} for _ in range(MAX_CHAT_MESSAGES)],
+        }
+    )
+    assert len(request.messages) == MAX_CHAT_MESSAGES
+    single = ChatCompletionRequest.model_validate(
+        {
+            "model": "mock-small",
+            "messages": [{"role": "user", "content": "x" * MAX_CHAT_MESSAGE_CHARS}],
+        }
+    )
+    assert len(single.messages[0].content) == MAX_CHAT_MESSAGE_CHARS
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model": "m" * 129},
+        {"messages": [{"role": "user", "content": "x" * (MAX_CHAT_MESSAGE_CHARS + 1)}]},
+        {"messages": [{"role": "user", "content": "x"} for _ in range(MAX_CHAT_MESSAGES + 1)]},
+        {"messages": [{"role": "user", "content": "x" * MAX_CHAT_MESSAGE_CHARS} for _ in range(5)]},
+    ],
+)
+def test_chat_request_rejects_oversized_fields(change: dict[str, object]) -> None:
+    payload: dict[str, object] = {
+        "model": "mock-small",
+        "messages": [{"role": "user", "content": "hi"}],
     }
     payload.update(change)
     with pytest.raises(ValidationError):

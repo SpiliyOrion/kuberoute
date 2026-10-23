@@ -922,6 +922,9 @@ Optional: `pre-commit install` to automatically lint/format on each commit.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/DECISIONS.md](docs/DECISIONS.md).
 
+The local-first threat model, CI security checks, and public-deployment
+requirements are documented in [docs/SECURITY.md](docs/SECURITY.md).
+
 ## Contribution workflow
 
 Create a feature branch, implement and test a small change, push it, and open a pull request. Merge into `main` only after the CI checks pass. Keep credentials, patient/private data, and `.env` files out of Git.

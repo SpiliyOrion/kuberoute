@@ -9,7 +9,6 @@ from typing import AsyncIterator, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -59,6 +58,7 @@ from kuberoute_gateway.schemas import (
     ChatCompletionUsage,
     ChatMessage,
 )
+from kuberoute_gateway.security import SecurityHeadersMiddleware
 
 
 def create_registry() -> ModelRegistry:
@@ -163,14 +163,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
 app.add_middleware(HTTPMetricsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(frontend_router)
 
 
 @app.exception_handler(RequestValidationError)
-async def safe_rag_validation_error(request: Request, exc: RequestValidationError) -> Response:
+async def safe_validation_error(request: Request, exc: RequestValidationError) -> Response:
+    detail = "Request is invalid"
     if request.url.path == "/v1/rag/chat/completions":
-        return JSONResponse(status_code=422, content={"detail": "RAG request is invalid"})
-    return await request_validation_exception_handler(request, exc)
+        detail = "RAG request is invalid"
+    elif request.url.path == "/v1/chat/completions":
+        detail = "Chat request is invalid"
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -203,9 +207,11 @@ async def create_chat_completion(
             decision = select_model(request.model, registry)
         backend = registry.get(decision.model_id)
     except NoEligibleModelError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503, detail="No eligible inference model is configured"
+        ) from exc
     except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown model: {request.model}") from exc
+        raise HTTPException(status_code=404, detail="Unknown model") from exc
 
     normalized = NormalizedChatRequest(
         model=decision.model_id,
