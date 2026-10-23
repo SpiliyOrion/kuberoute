@@ -2,7 +2,7 @@ name: KubeRoute CI
 on:
   pull_request:
   push:
-    branches: [main, feature/web-dashboard-foundation]
+    branches: [main, 'feature/**']
 permissions:
   contents: read
 jobs:
@@ -49,3 +49,48 @@ jobs:
           path: frontend/dist/
           if-no-files-found: error
           retention-days: 14
+  python_dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project and auditor
+        # The hosted Python 3.11 runner includes setuptools 79.0.1, affected by PYSEC-2026-3447.
+        run: python -m pip install -e '.[dev]' pip-audit==2.10.1 'setuptools>=83.0.0'
+      - name: Audit installed Python dependencies
+        run: python -m pip_audit --local --skip-editable --progress-spinner=off --desc=off
+  npm_dependencies:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Audit all locked npm dependencies
+        run: npm audit --audit-level=high
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan Git history with redacted output
+        run: |
+          if docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /repo --log-opts=--all --redact=100 --no-banner \
+            > "$RUNNER_TEMP/gitleaks-output.txt" 2>&1; then
+            echo 'Secret scan passed.'
+          else
+            echo 'Secret scan found potential matches or could not complete. Output is withheld from CI logs.'
+            exit 1
+          fi

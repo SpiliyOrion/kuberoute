@@ -82,7 +82,7 @@ def test_unknown_model_returns_404() -> None:
             json={"model": "missing", "messages": [{"role": "user", "content": "Hello"}]},
         )
     assert response.status_code == 404
-    assert response.json() == {"detail": "Unknown model: missing"}
+    assert response.json() == {"detail": "Unknown model"}
 
 
 def test_backend_failure_returns_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
