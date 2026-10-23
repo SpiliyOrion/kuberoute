@@ -755,11 +755,20 @@ gateway restart. The embedding model must already be installed in Ollama. For
 example, `ollama pull nomic-embed-text` is an **optional manual setup command**;
 KubeRoute never downloads it. Configure an existing generation backend with
 `KUBEROUTE_REMOTE_MODELS_JSON` or the legacy single-model variables as described
-above. The following PowerShell example runs the gateway locally:
+above. The following PowerShell example creates a harmless temporary document
+and runs the gateway locally:
 
 ```powershell
+$demoDir = Join-Path $env:TEMP 'kuberoute-rag-demo'
+New-Item -ItemType Directory -Force -Path $demoDir | Out-Null
+$demoDoc = Join-Path $demoDir 'synthetic-guide.md'
+@'
+Kubernetes Deployments replace failed Pods to maintain replica counts.
+HTTP 504 means an upstream inference response exceeded its timeout.
+Prometheus counters track requests and histograms measure duration.
+'@ | Set-Content -Path $demoDoc -Encoding utf8
 $env:KUBEROUTE_RAG_ENABLED = 'true'
-$env:KUBEROUTE_RAG_DOCUMENT_PATHS_JSON = '["C:\\path\\to\\synthetic-guide.md"]'
+$env:KUBEROUTE_RAG_DOCUMENT_PATHS_JSON = ConvertTo-Json -InputObject @($demoDoc) -Compress
 $env:KUBEROUTE_RAG_EMBEDDING_MODEL = 'nomic-embed-text'
 $env:KUBEROUTE_RAG_EMBEDDING_BASE_URL = 'http://127.0.0.1:11434'
 $env:KUBEROUTE_REMOTE_BASE_URL = 'http://127.0.0.1:11434'
@@ -818,6 +827,21 @@ store is provided. Set `KUBEROUTE_RAG_ENABLED=false` (or remove it) to disable
 RAG. Missing files, unavailable embedding models, and indexing failures leave
 the RAG endpoint unavailable with sanitized errors while ordinary gateway
 routes remain usable.
+
+A small localhost-only smoke test on October 23, 2026 used five temporary
+synthetic documents, `nomic-embed-text:latest`, and `llama3.2:3b`. The index
+initialized with five chunks. Two supported-question requests returned HTTP 200,
+the expected model, nonempty answers, and citations that resolved to supplied
+chunks. One unsupported-question request also returned HTTP 200 with a nonempty
+answer but no citation; that does **not** establish that the model abstained.
+The existing chat, health, models, and metrics routes returned HTTP 200. No
+generated text or local source paths were saved. In a separate five-question
+test using deliberately assigned fake embeddings, Recall@1 / MRR@3 was 1.0 / 1.0
+for semantic, 0.6 / 0.6 for lexical, and 0.8 / 0.9 for hybrid retrieval. Those
+figures verify the test fixture and ranking behavior, not real-world retrieval
+quality or a general advantage for any mode. Returned markers prove only that
+a passage was supplied: the model can cite an irrelevant passage, and absence
+of citations does not by itself prove that the answer is unsupported or safe.
 
 ## Test
 

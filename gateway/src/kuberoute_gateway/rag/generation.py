@@ -142,9 +142,12 @@ async def answer_question(
         )
     )
     if (
-        not generated.content.strip()
+        not isinstance(generated, GeneratedAnswer)
+        or not isinstance(generated.content, str)
+        or not generated.content.strip()
         or len(generated.content) > 32_000
         or generated.finish_reason not in ("stop", "length")
+        or not isinstance(generated.model, str)
         or not generated.model
     ):
         raise RagGenerationError("Generated answer is invalid")
