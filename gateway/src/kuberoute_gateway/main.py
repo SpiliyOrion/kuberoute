@@ -2,13 +2,16 @@
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import AsyncIterator, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from kuberoute_gateway.adaptive_routing import AdaptiveRoutingState, auto_routing_policy_from_env
@@ -21,6 +24,22 @@ from kuberoute_gateway.metrics import (
 )
 from kuberoute_gateway.mock_backends import MockLargeBackend, MockSmallBackend
 from kuberoute_gateway.performance_policy import InferenceObservation
+from kuberoute_gateway.rag.config import RagConfig, rag_config_from_env
+from kuberoute_gateway.rag.embeddings import (
+    EmbeddingInputError,
+    EmbeddingServiceError,
+    OllamaEmbeddingProvider,
+)
+from kuberoute_gateway.rag.generation import (
+    GeneratedAnswer,
+    RagContextError,
+    RagGenerationError,
+    RagInputError,
+    answer_question,
+)
+from kuberoute_gateway.rag.hybrid import HybridRetriever
+from kuberoute_gateway.rag.ingestion import ingest_paths
+from kuberoute_gateway.rag.schemas import RagChatRequest, RagChatResponse, RagSource
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
     BackendConnectionError,
@@ -37,6 +56,7 @@ from kuberoute_gateway.schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionUsage,
+    ChatMessage,
 )
 
 
@@ -65,6 +85,35 @@ def create_registry() -> ModelRegistry:
 registry = create_registry()
 
 
+@dataclass(frozen=True)
+class RagRuntime:
+    retriever: HybridRetriever
+    provider: OllamaEmbeddingProvider
+
+
+async def _close_embedding_provider(provider: OllamaEmbeddingProvider) -> None:
+    try:
+        await provider.close()
+    except Exception:
+        raise RuntimeError("Embedding provider shutdown failed") from None
+
+
+async def _initialize_rag(stack: AsyncExitStack, config: RagConfig) -> RagRuntime:
+    chunks = ingest_paths(config.paths)
+    if len(chunks) > 2_000:
+        raise ValueError("RAG document collection is too large")
+    provider = OllamaEmbeddingProvider(config.embedding_base_url, config.embedding_model)
+    try:
+        await provider.start()
+        retriever = HybridRetriever(config.embedding_model)
+        await retriever.add_chunks(chunks, provider)
+    except BaseException:
+        await provider.close()
+        raise
+    stack.push_async_callback(_close_embedding_provider, provider)
+    return RagRuntime(retriever, provider)
+
+
 async def _close_remote_backend(backend: OpenAICompatibleBackend) -> None:
     try:
         await backend.close()
@@ -83,6 +132,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.adaptive_routing = (
         AdaptiveRoutingState(eligible_remote_ids) if policy == "performance_v1" else None
     )
+    app.state.rag_runtime = None
+    app.state.rag_enabled = False
     try:
         async with AsyncExitStack() as stack:
             for model_id in registry.model_ids():
@@ -93,13 +144,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         await backend.start()
                     except Exception:
                         raise RuntimeError("Remote backend initialization failed") from None
+            try:
+                rag_config = rag_config_from_env()
+                app.state.rag_enabled = rag_config is not None
+                if rag_config is not None:
+                    app.state.rag_runtime = await _initialize_rag(stack, rag_config)
+            except Exception:
+                # Other gateway routes remain usable when the optional index is unavailable.
+                app.state.rag_enabled = True
+                app.state.rag_runtime = None
             yield
     finally:
         del app.state.adaptive_routing
+        del app.state.rag_runtime
+        del app.state.rag_enabled
 
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
 app.add_middleware(HTTPMetricsMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_rag_validation_error(request: Request, exc: RequestValidationError) -> Response:
+    if request.url.path == "/v1/rag/chat/completions":
+        return JSONResponse(status_code=422, content={"detail": "RAG request is invalid"})
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -206,6 +275,83 @@ async def create_chat_completion(
         raise HTTPException(status_code=502, detail="Upstream model failed") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Model inference failed") from exc
+
+
+@app.post("/v1/rag/chat/completions", response_model=RagChatResponse)
+async def create_rag_chat_completion(
+    request: RagChatRequest, http_request: Request
+) -> RagChatResponse:
+    """Retrieve bounded local evidence and use the existing inference path once."""
+    if not http_request.app.state.rag_enabled:
+        raise HTTPException(status_code=503, detail="RAG is disabled")
+    runtime: RagRuntime | None = http_request.app.state.rag_runtime
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="RAG index is unavailable")
+
+    async def generate(normalized: NormalizedChatRequest) -> GeneratedAnswer:
+        chat_request = ChatCompletionRequest(
+            model=normalized.model,
+            messages=[
+                ChatMessage(role=message.role, content=message.content)
+                for message in normalized.messages
+            ],
+            temperature=normalized.temperature,
+            seed=normalized.seed,
+            max_tokens=normalized.max_tokens,
+            reasoning_effort=normalized.reasoning_effort,
+        )
+        completion = await create_chat_completion(chat_request, http_request)
+        if len(completion.choices) != 1:
+            raise RagGenerationError("Generated answer is invalid")
+        choice = completion.choices[0]
+        return GeneratedAnswer(
+            choice.message.content, completion.model, choice.finish_reason, completion.usage
+        )
+
+    try:
+        result = await answer_question(
+            question=request.question,
+            model=request.model,
+            retriever=runtime.retriever,
+            provider=runtime.provider,
+            generate=generate,
+            retrieval_mode=request.retrieval_mode,
+            top_k=request.top_k,
+            temperature=request.temperature,
+            seed=request.seed,
+            max_tokens=request.max_tokens,
+            reasoning_effort=request.reasoning_effort,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail="Unknown model") from None
+        raise
+    except (RagInputError, EmbeddingInputError) as exc:
+        raise HTTPException(status_code=422, detail="RAG request is invalid") from exc
+    except RagContextError as exc:
+        raise HTTPException(status_code=413, detail="RAG context limit exceeded") from exc
+    except EmbeddingServiceError as exc:
+        raise HTTPException(status_code=502, detail="Embedding service failed") from exc
+    except RagGenerationError as exc:
+        raise HTTPException(status_code=502, detail="Generated answer is invalid") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="RAG request failed") from exc
+    return RagChatResponse(
+        answer=result.answer,
+        model=result.model,
+        sources=[
+            RagSource(
+                marker=source.marker,
+                source_id=source.source_id,
+                chunk_id=source.chunk_id,
+                chunk_index=source.chunk_index,
+            )
+            for source in result.sources
+        ],
+        retrieval_mode=result.retrieval_mode,
+        finish_reason=result.finish_reason,
+        usage=result.usage,
+    )
 
 
 @app.get("/health")

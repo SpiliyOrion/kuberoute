@@ -743,8 +743,81 @@ language. Its defaults are `k1=1.2` and `b=0.75`; repeated query terms count
 once. Each index holds at most 10,000 chunks. Hybrid candidate lists are
 bounded to 100 per method, and index additions and searches are serialized so
 queries never see a partial update. Retrieval remains in memory; there is no
-reranking, generation endpoint, or quality guarantee. Keep returned passage
-text private.
+reranking or quality guarantee. Keep returned passage text private.
+
+### Opt-in RAG chat generation
+
+`POST /v1/rag/chat/completions` joins the local document index, hybrid retrieval,
+and the gateway's existing model routing and inference path. It is **disabled by
+default**. Supply only explicitly named UTF-8 `.txt` or `.md` files. The index
+is built at gateway startup and held in memory; changing a file requires a
+gateway restart. The embedding model must already be installed in Ollama. For
+example, `ollama pull nomic-embed-text` is an **optional manual setup command**;
+KubeRoute never downloads it. Configure an existing generation backend with
+`KUBEROUTE_REMOTE_MODELS_JSON` or the legacy single-model variables as described
+above. The following PowerShell example runs the gateway locally:
+
+```powershell
+$env:KUBEROUTE_RAG_ENABLED = 'true'
+$env:KUBEROUTE_RAG_DOCUMENT_PATHS_JSON = '["C:\\path\\to\\synthetic-guide.md"]'
+$env:KUBEROUTE_RAG_EMBEDDING_MODEL = 'nomic-embed-text'
+$env:KUBEROUTE_RAG_EMBEDDING_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_MODEL_ID = 'qwen3:0.6b'
+uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8000
+```
+
+The paths JSON is an explicit list, not a directory scan. Use the corresponding
+container-reachable paths and embedding URL if running in Docker. Do not mix
+legacy and JSON remote-model configuration. A local request can select an
+explicit model or use `"auto"` to invoke the same first-eligible or opt-in
+adaptive routing policy used by ordinary chat completions:
+
+```powershell
+$body = @{
+  model = 'auto'
+  question = 'What does the synthetic guide say about timeouts?'
+  retrieval_mode = 'hybrid'
+  top_k = 5
+  temperature = 0
+  max_tokens = 128
+  stream = $false
+} | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://127.0.0.1:8000/v1/rag/chat/completions' -Method Post -ContentType 'application/json' -Body $body
+```
+
+`retrieval_mode` can be `hybrid` (default), `semantic`, or `lexical`. A response
+has `answer`, the **actual** selected `model`, `retrieval_mode`, optional
+`finish_reason` and `usage`, and cited `sources` containing only marker, hashed
+source ID, hashed chunk ID, and chunk index. For example:
+
+```json
+{
+  "answer": "The guide recommends a timeout [1].",
+  "model": "qwen3:0.6b",
+  "retrieval_mode": "hybrid",
+  "finish_reason": "stop",
+  "sources": [{"marker": "[1]", "source_id": "<source hash>", "chunk_id": "<chunk hash>", "chunk_index": 0}]
+}
+```
+
+At most ten passages are requested and at most 6,000 evidence characters are
+sent to generation; the default output limit is 256 tokens. Duplicate passage
+text is omitted. If retrieval finds no
+evidence, the endpoint abstains without calling a model (`model` and
+`finish_reason` are null, `sources` is empty). If the answer has no valid
+citations, `sources` is empty; invented numeric markers cause a 502. Source
+references identify passages supplied to the model, **not** proof that a claim
+is factually correct. Prompt instructions separate untrusted document text
+from system rules, but prompting does not guarantee resistance to prompt
+injection. Generation can still be inaccurate or incomplete, especially when
+`finish_reason` is `length`. Only local inference should be used with private
+documents: configuring an externally hosted inference server would send
+retrieved passage text to that server. No document upload or persistent vector
+store is provided. Set `KUBEROUTE_RAG_ENABLED=false` (or remove it) to disable
+RAG. Missing files, unavailable embedding models, and indexing failures leave
+the RAG endpoint unavailable with sanitized errors while ordinary gateway
+routes remain usable.
 
 ## Test
 
