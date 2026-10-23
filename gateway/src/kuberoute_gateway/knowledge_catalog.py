@@ -26,6 +26,11 @@ class CatalogError(ValueError):
 class CatalogSource:
     id: str
     document: Path = field(repr=False)
+    title: str = field(repr=False)
+    authors: str = field(repr=False)
+    publication_year: int | None = None
+    source_type: str = ""
+    original_url: str = field(default="", repr=False)
 
 
 def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -86,9 +91,9 @@ def _validate_source(record: object, root: Path) -> CatalogSource:
     except (OSError, RuntimeError, ValueError):
         raise CatalogError("Catalog document is unavailable") from None
 
-    _required_text(record, "title")
-    _required_text(record, "authors")
-    _required_text(record, "source_type", 64)
+    title = _required_text(record, "title")
+    authors = _required_text(record, "authors")
+    source_type = _required_text(record, "source_type", 64)
     if "publication_year" not in record or "doi" not in record or "pmid" not in record:
         raise CatalogError("Catalog metadata is incomplete or invalid")
     year = record.get("publication_year")
@@ -99,7 +104,8 @@ def _validate_source(record: object, root: Path) -> CatalogSource:
     ):
         raise CatalogError("Catalog publication year is invalid")
     try:
-        url = urlsplit(_required_text(record, "original_url", 500))
+        original_url = _required_text(record, "original_url", 500)
+        url = urlsplit(original_url)
         host = url.hostname
         try:
             address = ipaddress.ip_address(host or "")
@@ -111,7 +117,10 @@ def _validate_source(record: object, root: Path) -> CatalogSource:
             or "." not in host
             or host == "localhost"
             or host.endswith(".local")
-            or (address is not None and not address.is_global)
+            or address is not None
+            or not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host)
+            or host.endswith((".local", ".localhost", ".internal", ".test", ".invalid"))
+            or any(ord(character) < 33 or ord(character) == 127 for character in original_url)
             or "@" in url.netloc
             or url.username
             or url.password
@@ -141,7 +150,7 @@ def _validate_source(record: object, root: Path) -> CatalogSource:
         date.fromisoformat(_required_text(record, "verified_on", 10))
     except ValueError:
         raise CatalogError("Catalog verification date is invalid") from None
-    return CatalogSource(source_id, canonical)
+    return CatalogSource(source_id, canonical, title, authors, year, source_type, original_url)
 
 
 def load_catalog(manifest: str | Path) -> tuple[CatalogSource, ...]:

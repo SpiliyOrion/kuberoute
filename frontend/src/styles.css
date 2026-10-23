@@ -173,6 +173,61 @@ button {
   font-weight:700;
   letter-spacing:.14em
 }
+.setting-label {
+  display:flex;
+  align-items:center;
+  gap:6px
+}
+.setting-help {
+  position:relative;
+  display:inline-flex;
+  letter-spacing:normal;
+  font-weight:400;
+  z-index:5
+}
+.help-trigger {
+  width:32px;
+  height:32px;
+  border:1px solid #64758e;
+  border-radius:50%;
+  background:#263348;
+  color:#dceaf5;
+  cursor:pointer;
+  font-size:12px;
+  font-weight:700;
+  line-height:1
+}
+.help-trigger:hover,.help-trigger[aria-expanded="true"] {
+  border-color:#77ddc1;
+  color:#aaf3dc
+}
+.help-popover {
+  position:absolute;
+  top:calc(100% + 9px);
+  right:0;
+  width:min(320px,calc(100vw - 32px));
+  padding:13px 15px;
+  border:1px solid #4e6079;
+  border-radius:10px;
+  background:#1d2939;
+  box-shadow:0 12px 28px #0009;
+  color:#e0eaf4;
+  font-size:12px;
+  font-weight:400;
+  line-height:1.5;
+  letter-spacing:normal;
+  text-transform:none
+}
+.help-popover p {
+  margin:0 0 8px;
+  color:inherit
+}
+.help-popover p:last-child {
+  margin-bottom:0
+}
+.help-popover strong {
+  color:#aaf3dc
+}
 .model-selector select {
   min-width:210px;
   max-width:300px;
@@ -197,10 +252,14 @@ button {
   color:#a6b5c8;
   font-size:12px
 }
-.rag-controls label {
+.rag-setting {
   display:flex;
   align-items:center;
   gap:9px
+}
+.rag-setting .help-popover {
+  left:0;
+  right:auto
 }
 .rag-controls select {
   border:1px solid #3c4b60;
@@ -209,7 +268,7 @@ button {
   background:#202939;
   padding:7px
 }
-.rag-controls p {
+.rag-controls > p {
   flex-basis:100%;
   margin:0;
   color:#93a7bf;
@@ -534,6 +593,18 @@ button {
   }
   .rag-controls {
     padding:12px 17px
+  }
+  .help-popover,.rag-setting .help-popover {
+    position:fixed;
+    top:84px;
+    left:16px;
+    right:16px;
+    width:auto;
+    max-height:50vh;
+    overflow:auto
+  }
+  .rag-setting .help-popover {
+    top:145px
   }
   .conversation-content {
     padding:20px

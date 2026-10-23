@@ -51,6 +51,24 @@ describe('RAG HTTP client', () => {
     finish_reason: 'stop', sources: [{ marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2 }],
   }
 
+  it('accepts verified metadata only with a safe HTTPS publication link', async () => {
+    const source = { ...result.sources[0], catalog_id: 'verified_study', title: 'Synthetic study', authors: 'Research Group', publication_year: 2023, source_type: 'review', original_url: 'https://example.org/study' }
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [source] }), { status: 200 }))
+    const answer = await completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)
+    expect(answer.sources[0].reference).toEqual({ catalogId: 'verified_study', title: 'Synthetic study', authors: 'Research Group', publicationYear: 2023, sourceType: 'review', originalUrl: 'https://example.org/study' })
+  })
+
+  it.each(['javascript:alert(1)', 'file:///private', 'https://127.0.0.1/private', 'https://example.org@localhost/private', 'https://example.org/study#fragment'])('rejects unsafe publication URL %s', async (url) => {
+    const source = { ...result.sources[0], catalog_id: 'verified_study', title: 'Synthetic study', authors: 'Research Group', source_type: 'review', original_url: url }
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [source] }), { status: 200 }))
+    await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow('invalid RAG answer')
+  })
+
+  it('rejects partial metadata without inventing a citation', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [{ ...result.sources[0], title: 'Unverified study' }] }), { status: 200 }))
+    await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow('invalid RAG answer')
+  })
+
   it('sends only the current question and bounded retrieval settings', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200 }))
     globalThis.fetch = fetchMock

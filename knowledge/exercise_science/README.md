@@ -2,7 +2,7 @@
 
 This is an educational, local-first collection of **12 original summaries** of research abstracts and NASM framework pages, verified on 2026-10-23. It is not medical advice, a rehabilitation protocol, or proof that one program is best for everyone. The summaries distinguish findings reported by sources from practical interpretation and uncertainty. NASM's OPT and corrective-exercise systems are labeled professional frameworks, not independent demonstrations of superiority.
 
-`manifest.json` is the curated source catalog. Each entry has a stable **catalog ID**, relative document path, bibliographic metadata, topic labels, and verification date. The current RAG ingestion code independently hashes each local path to create a **runtime source ID**. Those hashes depend on the file's location; catalog IDs are **not yet mapped** into API responses or the dashboard. Do not describe a displayed RAG source hash as if it were already a bibliographic citation. Follow the original URLs in the manifest to inspect the underlying publications.
+`manifest.json` is the curated source catalog. Each entry has a stable **catalog ID**, relative document path, bibliographic metadata, topic labels, and verification date. RAG ingestion hashes each canonical local path to create a **runtime source ID**. With the optional manifest setting below, a matching cited runtime source is accompanied by verified bibliographic metadata in the API and dashboard. Without that setting, citations retain their hashed display. A marker still identifies a retrieved passage, not proof that every claim is supported. Follow the original URLs in the manifest to inspect the underlying publications.
 
 ## Run the collection locally on Windows PowerShell
 
@@ -12,6 +12,7 @@ Start with an installed Python environment containing KubeRoute. Validate the ca
 $manifest = 'knowledge/exercise_science/manifest.json'
 python -m kuberoute_gateway.knowledge_catalog validate $manifest
 $env:KUBEROUTE_RAG_DOCUMENT_PATHS_JSON = python -m kuberoute_gateway.knowledge_catalog paths $manifest
+$env:KUBEROUTE_RAG_SOURCE_MANIFEST = (Resolve-Path $manifest).Path
 ```
 
 The `paths` command emits JSON for environment-variable assignment; it does not change files or start a server. Keep its output and the RAG configuration out of logs or committed configuration. A local Ollama server and the existing `nomic-embed-text` and `qwen3:0.6b` models are required for this example. KubeRoute does not install or download them.

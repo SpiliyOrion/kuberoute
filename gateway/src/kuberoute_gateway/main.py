@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import AsyncIterator, Literal
@@ -16,6 +16,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from kuberoute_gateway.adaptive_routing import AdaptiveRoutingState, auto_routing_policy_from_env
 from kuberoute_gateway.backends import ChatInputMessage, NormalizedChatRequest
 from kuberoute_gateway.frontend import router as frontend_router
+from kuberoute_gateway.knowledge_catalog import CatalogSource, load_catalog
 from kuberoute_gateway.metrics import (
     INFERENCE_DURATION,
     INFERENCE_REQUESTS,
@@ -38,7 +39,7 @@ from kuberoute_gateway.rag.generation import (
     answer_question,
 )
 from kuberoute_gateway.rag.hybrid import HybridRetriever
-from kuberoute_gateway.rag.ingestion import ingest_paths
+from kuberoute_gateway.rag.ingestion import ingest_paths, load_documents
 from kuberoute_gateway.rag.schemas import RagChatRequest, RagChatResponse, RagSource
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
@@ -90,6 +91,7 @@ registry = create_registry()
 class RagRuntime:
     retriever: HybridRetriever
     provider: OllamaEmbeddingProvider
+    catalog_by_source_id: dict[str, CatalogSource] = field(default_factory=dict, repr=False)
 
 
 async def _close_embedding_provider(provider: OllamaEmbeddingProvider) -> None:
@@ -100,6 +102,13 @@ async def _close_embedding_provider(provider: OllamaEmbeddingProvider) -> None:
 
 
 async def _initialize_rag(stack: AsyncExitStack, config: RagConfig) -> RagRuntime:
+    catalog_by_source_id: dict[str, CatalogSource] = {}
+    if config.source_manifest is not None:
+        sources = load_catalog(config.source_manifest)
+        documents = load_documents([source.document for source in sources])
+        catalog_by_source_id = {
+            document.source_id: source for document, source in zip(documents, sources, strict=True)
+        }
     chunks = ingest_paths(config.paths)
     if len(chunks) > 2_000:
         raise ValueError("RAG document collection is too large")
@@ -112,7 +121,7 @@ async def _initialize_rag(stack: AsyncExitStack, config: RagConfig) -> RagRuntim
         await provider.close()
         raise
     stack.push_async_callback(_close_embedding_provider, provider)
-    return RagRuntime(retriever, provider)
+    return RagRuntime(retriever, provider, catalog_by_source_id)
 
 
 async def _close_remote_backend(backend: OpenAICompatibleBackend) -> None:
@@ -353,6 +362,14 @@ async def create_rag_chat_completion(
                 source_id=source.source_id,
                 chunk_id=source.chunk_id,
                 chunk_index=source.chunk_index,
+                catalog_id=metadata.id
+                if (metadata := runtime.catalog_by_source_id.get(source.source_id))
+                else None,
+                title=metadata.title if metadata else None,
+                authors=metadata.authors if metadata else None,
+                publication_year=metadata.publication_year if metadata else None,
+                source_type=metadata.source_type if metadata else None,
+                original_url=metadata.original_url if metadata else None,
             )
             for source in result.sources
         ],

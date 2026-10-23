@@ -28,6 +28,12 @@ class RagSource(BaseModel):
     source_id: str
     chunk_id: str
     chunk_index: int
+    catalog_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    title: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    authors: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    publication_year: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    source_type: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    original_url: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class RagChatResponse(BaseModel):

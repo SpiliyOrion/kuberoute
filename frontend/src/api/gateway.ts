@@ -16,6 +16,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function safePublicationUrl(value: string): boolean {
+  if (value.length > 500 || [...value].some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)) return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port &&
+      !url.search && !url.hash && url.href === value &&
+      /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(url.hostname) &&
+      !/\.(?:local|localhost|internal|test|invalid)$/i.test(url.hostname) &&
+      !/^\d+(?:\.\d+){3}$/.test(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 export async function discoverModels(signal?: AbortSignal): Promise<string[]> {
   let response: Response
   try {
@@ -183,8 +197,28 @@ export async function completeRag(
     ) {
       throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
     }
+    const metadataFields = ['catalog_id', 'title', 'authors', 'publication_year', 'source_type', 'original_url']
+    const hasMetadata = metadataFields.some((field) => source[field] !== undefined)
+    let reference: RagSource['reference']
+    if (hasMetadata) {
+      if (
+        typeof source.catalog_id !== 'string' || !/^[a-z][a-z0-9_]{2,63}$/.test(source.catalog_id) ||
+        typeof source.title !== 'string' || !source.title.trim() || source.title.length > 300 ||
+        typeof source.authors !== 'string' || !source.authors.trim() || source.authors.length > 300 ||
+        typeof source.source_type !== 'string' || !source.source_type.trim() || source.source_type.length > 64 ||
+        typeof source.original_url !== 'string' || !safePublicationUrl(source.original_url) ||
+        (source.publication_year !== undefined && source.publication_year !== null &&
+          (typeof source.publication_year !== 'number' || !Number.isInteger(source.publication_year) || source.publication_year < 1800 || source.publication_year > new Date().getFullYear()))
+      ) throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
+      reference = {
+        catalogId: source.catalog_id, title: source.title, authors: source.authors,
+        publicationYear: typeof source.publication_year === 'number' ? source.publication_year : null,
+        sourceType: source.source_type,
+        originalUrl: source.original_url,
+      }
+    }
     seen.add(source.marker)
-    sources.push({ marker: source.marker, sourceId: source.source_id, chunkId: source.chunk_id, chunkIndex: source.chunk_index })
+    sources.push({ marker: source.marker, sourceId: source.source_id, chunkId: source.chunk_id, chunkIndex: source.chunk_index, ...(reference ? { reference } : {}) })
   }
   return {
     answer: body.answer as string,

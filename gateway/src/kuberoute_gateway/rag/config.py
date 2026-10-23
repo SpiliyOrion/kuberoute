@@ -13,6 +13,7 @@ class RagConfig:
     paths: tuple[str, ...] = field(repr=False)
     embedding_model: str
     embedding_base_url: str = field(repr=False)
+    source_manifest: str | None = field(default=None, repr=False)
 
 
 def rag_config_from_env() -> RagConfig | None:
@@ -41,4 +42,7 @@ def rag_config_from_env() -> RagConfig | None:
         raise ValueError("RAG embedding model configuration is invalid") from None
     if not base_url:
         raise ValueError("RAG embedding server configuration is invalid")
-    return RagConfig(tuple(paths), model, base_url)
+    source_manifest = os.getenv("KUBEROUTE_RAG_SOURCE_MANIFEST")
+    if source_manifest is not None and not source_manifest.strip():
+        raise ValueError("RAG source manifest configuration is invalid")
+    return RagConfig(tuple(paths), model, base_url, source_manifest)
