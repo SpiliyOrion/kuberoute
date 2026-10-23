@@ -1,4 +1,4 @@
-name: Python CI
+name: KubeRoute CI
 on:
   pull_request:
   push:
@@ -22,3 +22,43 @@ jobs:
         run: ruff format --check .
       - name: Pytest
         run: pytest -q
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Bootstrap lockfile if absent
+        id: lockfile
+        run: |
+          if [ ! -f package-lock.json ]; then
+            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
+            npm install --package-lock-only --ignore-scripts
+          fi
+      - name: Install
+        run: npm ci
+      - name: Upload bootstrap lockfile
+        if: steps.lockfile.outputs.bootstrapped == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuberoute-frontend-lockfile-${{ github.sha }}
+          path: frontend/package-lock.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm run test
+      - name: Build
+        run: npm run build
+      - name: Upload dashboard build
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuberoute-dashboard-${{ github.sha }}
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 14
