@@ -2,7 +2,7 @@ name: KubeRoute CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feature/web-dashboard-foundation]
 permissions:
   contents: read
 jobs:
