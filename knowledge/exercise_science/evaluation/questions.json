@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "collection_id": "exercise_science_v1",
+  "questions": [
+    {
+      "id": "es01", "category": "volume", "question": "Does the evidence identify exactly twelve weekly sets per muscle as optimal for everyone?",
+      "expected_source_ids": ["pelland_2026_volume_frequency", "schoenfeld_2017_volume"],
+      "answer_points": ["No universal exact optimum is established", "Higher weekly volume can improve hypertrophy with diminishing returns"],
+      "caveats": ["Population and set-counting methods vary"], "sufficient_evidence": true
+    },
+    {
+      "id": "es02", "category": "volume", "question": "What did the 2017 weekly-volume review associate with additional resistance-training sets?",
+      "expected_source_ids": ["schoenfeld_2017_volume"],
+      "answer_points": ["More weekly sets were associated with greater muscle-size gains"],
+      "caveats": ["The analysis does not prescribe an individual optimum"], "sufficient_evidence": true
+    },
+    {
+      "id": "es03", "category": "volume", "question": "How did the 2026 dose-response analysis describe returns from increasing weekly sets?",
+      "expected_source_ids": ["pelland_2026_volume_frequency"],
+      "answer_points": ["Hypertrophy and strength increased with volume", "Diminishing returns were reported"],
+      "caveats": ["Meta-regression is not an individual prescription"], "sufficient_evidence": true
+    },
+    {
+      "id": "es04", "category": "load", "question": "Do lower and higher resistance-training loads produce similar average hypertrophy in the 2021 review?",
+      "expected_source_ids": ["refalo_2021_load"],
+      "answer_points": ["Similar average hypertrophy was reported across load groups"],
+      "caveats": ["Strength outcomes differed", "Similar averages do not prove identical individual outcomes"], "sufficient_evidence": true
+    },
+    {
+      "id": "es05", "category": "load", "question": "Which load approach showed a clearer advantage for maximal strength in the reviewed evidence?",
+      "expected_source_ids": ["currier_2023_prescription", "refalo_2021_load"],
+      "answer_points": ["Higher loads showed a clearer advantage for maximal strength"],
+      "caveats": ["The load cutoffs differ between reviews"], "sufficient_evidence": true
+    },
+    {
+      "id": "es06", "category": "load", "question": "Does NASM's Phase 3 rep range prove a universal hypertrophy optimum?",
+      "expected_source_ids": ["nasm_opt_model", "refalo_2021_load"],
+      "answer_points": ["No", "The NASM range describes its framework", "Hypertrophy can occur across load ranges"],
+      "caveats": ["The framework is not a comparative trial"], "sufficient_evidence": true
+    },
+    {
+      "id": "es07", "category": "frequency", "question": "When weekly volume is matched, does training a muscle more often clearly improve hypertrophy?",
+      "expected_source_ids": ["schoenfeld_2019_frequency"],
+      "answer_points": ["No meaningful average hypertrophy advantage was detected with higher frequency at matched volume"],
+      "caveats": ["Frequency may help distribute volume"], "sufficient_evidence": true
+    },
+    {
+      "id": "es08", "category": "frequency", "question": "Why must training frequency be distinguished from weekly set volume?",
+      "expected_source_ids": ["schoenfeld_2019_frequency", "pelland_2026_volume_frequency"],
+      "answer_points": ["Increasing sessions can also increase total sets", "Volume-matched frequency results differ from non-matched results"],
+      "caveats": ["Strength and hypertrophy may respond differently"], "sufficient_evidence": true
+    },
+    {
+      "id": "es09", "category": "effort", "question": "How did estimated proximity to failure relate differently to strength and hypertrophy in the 2024 meta-regressions?",
+      "expected_source_ids": ["robinson_2024_failure"],
+      "answer_points": ["Strength association was negligible", "Hypertrophy tended to increase closer to failure"],
+      "caveats": ["RIR was estimated and model fit was modest"], "sufficient_evidence": true
+    },
+    {
+      "id": "es10", "category": "effort", "question": "Must every hypertrophy set reach momentary failure according to the collection?",
+      "expected_source_ids": ["robinson_2024_failure", "acsm_2026_position"],
+      "answer_points": ["No requirement for every set to reach failure is established"],
+      "caveats": ["Closer proximity may matter, but the exact optimum is uncertain"], "sufficient_evidence": true
+    },
+    {
+      "id": "es11", "category": "rest", "question": "What did the 2024 rest-interval synthesis suggest about resting longer than one minute for hypertrophy?",
+      "expected_source_ids": ["singer_2024_rest"],
+      "answer_points": ["A small possible benefit above 60 seconds was suggested"],
+      "caveats": ["Estimates overlapped and only nine studies contributed"], "sufficient_evidence": true
+    },
+    {
+      "id": "es12", "category": "rest", "question": "Did the rest-interval review show continuously increasing hypertrophy beyond ninety seconds of rest?",
+      "expected_source_ids": ["singer_2024_rest"],
+      "answer_points": ["No appreciable additional difference above 90 seconds was detected"],
+      "caveats": ["This is not proof that all longer rests are equivalent"], "sufficient_evidence": true
+    },
+    {
+      "id": "es13", "category": "range_of_motion", "question": "What range-of-motion pattern did the 2023 review often favor for growth at several muscle sites?",
+      "expected_source_ids": ["kassiano_2023_rom"],
+      "answer_points": ["Full or longer-muscle-length partial ranges often favored growth over short-length partial ranges"],
+      "caveats": ["Effects differed by muscle and measurement site"], "sufficient_evidence": true
+    },
+    {
+      "id": "es14", "category": "nasm", "question": "What are the five phases NASM names in its OPT model?",
+      "expected_source_ids": ["nasm_opt_model"],
+      "answer_points": ["Stabilization endurance", "Strength endurance", "Muscular development", "Maximal strength", "Power"],
+      "caveats": ["These are phases of NASM's proprietary framework"], "sufficient_evidence": true
+    },
+    {
+      "id": "es15", "category": "nasm", "question": "What sequence does NASM describe for its corrective exercise continuum?",
+      "expected_source_ids": ["nasm_corrective_2022"],
+      "answer_points": ["Inhibit", "Lengthen", "Activate", "Integrate"],
+      "caveats": ["The sequence is professional guidance, not proof of injury prevention"], "sufficient_evidence": true
+    },
+    {
+      "id": "es16", "category": "evidence_limits", "question": "Can a movement screen in this collection reliably predict a person's future injury?",
+      "expected_source_ids": ["mccunn_2016_screens"],
+      "answer_points": ["The review found insufficient evidence to call available screens injury-prediction tools"],
+      "caveats": ["This does not evaluate every possible coaching use of observation"], "sufficient_evidence": true
+    },
+    {
+      "id": "es17", "category": "outside_scope", "question": "What rehabilitation protocol should a person with a torn knee ligament follow?",
+      "expected_source_ids": [],
+      "answer_points": ["The collection cannot supply an individual rehabilitation protocol"],
+      "caveats": ["Refer to a qualified health professional"], "sufficient_evidence": false
+    },
+    {
+      "id": "es18", "category": "outside_scope", "question": "What exact weekly set count will maximize muscle growth for a specific person?",
+      "expected_source_ids": [],
+      "answer_points": ["No exact individualized optimum can be inferred"],
+      "caveats": ["Population averages and diminishing returns do not determine individual response"], "sufficient_evidence": false
+    }
+  ]
+}
