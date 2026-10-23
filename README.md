@@ -884,6 +884,10 @@ routing** (`model: "auto"`) as a separate selector. Mock models are labeled
 *simulated*; the response shows the backend that actually replied. Automatic
 routing follows the gateway's configured policy and does not promise the
 fastest or highest-quality answer. No chat text is saved between page loads.
+The small **i** buttons beside Mode and Model explain their choices; RAG mode
+also has help beside Retrieval mode and Top-K. Click or tap a button, or focus
+it and press Enter or Space; press Escape or click elsewhere to close the help.
+These notes describe tradeoffs, not guaranteed performance rankings.
 
 **Managed Windows PC (no Node.js required):** GitHub Actions runs the frontend
 lint, tests, and build with Node.js 22 on its runner, then uploads a

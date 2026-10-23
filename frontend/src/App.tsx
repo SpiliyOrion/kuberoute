@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { discoverModels, GatewayError } from './api/gateway'
 import { ChatMessage } from './components/ChatMessage'
+import { SettingHelp } from './components/SettingHelp'
 import { MAX_MESSAGE_CHARS, useChat } from './hooks/useChat'
 import { MAX_QUESTION_CHARS, useRag } from './hooks/useRag'
 import type { RetrievalMode } from './types'
@@ -70,24 +71,24 @@ export default function App() {
         <div className="header-title"><span className="eyebrow">WORKSPACE / {mode.toUpperCase()}</span><strong>{mode === 'chat' ? 'Chat' : 'Document-grounded RAG'}</strong></div>
         <div className="toolbar-right">
           <div className="connection"><span className={`status-dot ${modelError ? 'offline' : ''}`} />{loadingModels ? 'Connecting' : modelError ? 'Offline' : 'Gateway connected'}</div>
-          <label className="model-selector"><span>MODE</span><select aria-label="Mode" value={mode} disabled={requestPending} onChange={(event) => { setMode(event.target.value as 'chat' | 'rag'); setDraft('') }}>
+          <div className="model-selector"><div className="setting-label"><label htmlFor="mode-select">MODE</label><SettingHelp label="Mode"><p><strong>Chat:</strong> Standard multi-turn conversations with a selected language model.</p><p><strong>RAG:</strong> Retrieves document passages to help answer research questions. Each question is independent; earlier RAG messages are not sent again.</p></SettingHelp></div><select id="mode-select" aria-label="Mode" value={mode} disabled={requestPending} onChange={(event) => { setMode(event.target.value as 'chat' | 'rag'); setDraft('') }}>
             <option value="chat">Chat</option><option value="rag">RAG</option>
-          </select></label>
-          <label className="model-selector"><span>MODEL</span><select aria-label="Select model" value={model} disabled={requestPending} onChange={(event) => setModel(event.target.value)}>
+          </select></div>
+          <div className="model-selector"><div className="setting-label"><label htmlFor="model-select">MODEL</label><SettingHelp label="Model"><p><strong>Automatic:</strong> The gateway chooses an eligible real model using its configured policy. It is not guaranteed to pick the fastest or most accurate model.</p><p><strong>Specific model:</strong> Sends the request to that model.</p><p><strong>Mock models:</strong> Simulated responses for testing, not genuine AI inference.</p></SettingHelp></div><select id="model-select" aria-label="Select model" value={model} disabled={requestPending} onChange={(event) => setModel(event.target.value)}>
             <option value="auto">Automatic routing</option>
             {models.map((id) => <option value={id} key={id}>{modelLabel(id)}</option>)}
-          </select></label>
+          </select></div>
         </div>
       </header>
 
       {modelError && <div className="banner" role="alert"><span>{modelError}</span><button type="button" onClick={() => setReloadKey((key) => key + 1)}>Retry discovery</button></div>}
       {mode === 'rag' && <div className="rag-controls">
-        <label>Retrieval mode <select aria-label="Retrieval mode" value={retrievalMode} disabled={requestPending} onChange={(event) => setRetrievalMode(event.target.value as RetrievalMode)}>
+        <div className="rag-setting"><div className="setting-label"><label htmlFor="retrieval-select">Retrieval mode</label><SettingHelp label="Retrieval mode"><p><strong>Hybrid:</strong> Combines semantic vector search and BM25 with reciprocal rank fusion. A balanced default, but not always best.</p><p><strong>Semantic:</strong> Embedding similarity finds related concepts even when wording differs; it can miss precise terms.</p><p><strong>Lexical / BM25:</strong> Favors matching important words and phrases, useful for technical or exact terminology; it can miss paraphrases.</p></SettingHelp></div><select id="retrieval-select" aria-label="Retrieval mode" value={retrievalMode} disabled={requestPending} onChange={(event) => setRetrievalMode(event.target.value as RetrievalMode)}>
           <option value="hybrid">Hybrid search</option><option value="semantic">Semantic search</option><option value="lexical">Lexical / BM25 search</option>
-        </select></label>
-        <label>Top-K passages <select aria-label="Top-K passages" value={topK} disabled={requestPending} onChange={(event) => setTopK(Number(event.target.value))}>
+        </select></div>
+        <div className="rag-setting"><div className="setting-label"><label htmlFor="top-k-select">Top-K passages</label><SettingHelp label="Top-K passages"><p>Top-K limits the number of retrieved passages considered for an answer. The default of 5 balances focus and coverage.</p><p>Lower values give more focused context but may miss useful evidence. Higher values broaden coverage but may add irrelevant context. Context limits or duplicate passages can reduce what reaches the model or appears in citations.</p></SettingHelp></div><select id="top-k-select" aria-label="Top-K passages" value={topK} disabled={requestPending} onChange={(event) => setTopK(Number(event.target.value))}>
           {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
-        </select></label>
+        </select></div>
         <p>Each RAG question is independent. Earlier questions stay visible in this tab but are not sent as conversation history.</p>
       </div>}
       <div className="conversation-scroll">

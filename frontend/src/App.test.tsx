@@ -19,6 +19,47 @@ function setupFetch(response = chatResponse()) {
   return mocked
 }
 
+it('explains Chat, RAG, routing, and mock models with accessible help controls', async () => {
+  setupFetch()
+  render(<App />)
+  await screen.findByRole('option', { name: /mock-small/ })
+  const modeHelp = screen.getByRole('button', { name: 'Mode help' })
+  expect(modeHelp).toHaveAttribute('aria-expanded', 'false')
+  await userEvent.click(modeHelp)
+  expect(modeHelp).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByRole('note')).toHaveTextContent('Standard multi-turn conversations')
+  expect(screen.getByRole('note')).toHaveTextContent('Each question is independent')
+  await userEvent.keyboard('{Escape}')
+  expect(modeHelp).toHaveAttribute('aria-expanded', 'false')
+
+  await userEvent.click(screen.getByRole('button', { name: 'Model help' }))
+  expect(screen.getByRole('note')).toHaveTextContent('not guaranteed to pick the fastest or most accurate')
+  expect(screen.getByRole('note')).toHaveTextContent('Sends the request to that model')
+  expect(screen.getByRole('note')).toHaveTextContent('Simulated responses for testing')
+  await userEvent.click(screen.getByRole('combobox', { name: 'Select model' }))
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+})
+
+it('explains retrieval options and Top-K without changing the default selection', async () => {
+  setupFetch()
+  render(<App />)
+  await screen.findByRole('option', { name: /mock-small/ })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  const retrievalHelp = screen.getByRole('button', { name: 'Retrieval mode help' })
+  fireEvent.pointerDown(retrievalHelp, { pointerType: 'touch' })
+  await userEvent.click(retrievalHelp)
+  expect(screen.getByRole('note')).toHaveTextContent('reciprocal rank fusion')
+  expect(screen.getByRole('note')).toHaveTextContent('wording differs')
+  expect(screen.getByRole('note')).toHaveTextContent('technical or exact terminology')
+  await userEvent.click(retrievalHelp)
+  await userEvent.click(screen.getByRole('button', { name: 'Top-K passages help' }))
+  expect(screen.getByRole('note')).toHaveTextContent('default of 5')
+  expect(screen.getByRole('note')).toHaveTextContent('may miss useful evidence')
+  expect(screen.getByRole('note')).toHaveTextContent('irrelevant context')
+  expect(screen.getByRole('combobox', { name: 'Retrieval mode' })).toHaveValue('hybrid')
+  expect(screen.getByRole('combobox', { name: 'Top-K passages' })).toHaveValue('5')
+})
+
 it('loads real and simulated models and sends automatic routing by default', async () => {
   const mocked = setupFetch(chatResponse('qwen3:0.6b'))
   render(<App />)
