@@ -828,6 +828,39 @@ RAG. Missing files, unavailable embedding models, and indexing failures leave
 the RAG endpoint unavailable with sanitized errors while ordinary gateway
 routes remain usable.
 
+### Optional verified source citations
+
+An explicitly configured source manifest adds bibliographic fields to cited
+RAG passages. The manifest is optional; without it, source references retain
+their existing hashed IDs. To use the 12-source exercise-science collection in
+Windows PowerShell, from the repository root with the Python package installed:
+
+```powershell
+$manifest = 'knowledge/exercise_science/manifest.json'
+python -m kuberoute_gateway.knowledge_catalog validate $manifest
+$env:KUBEROUTE_RAG_DOCUMENT_PATHS_JSON = python -m kuberoute_gateway.knowledge_catalog paths $manifest
+$env:KUBEROUTE_RAG_SOURCE_MANIFEST = (Resolve-Path $manifest).Path
+$env:KUBEROUTE_RAG_ENABLED = 'true'
+$env:KUBEROUTE_RAG_EMBEDDING_MODEL = 'nomic-embed-text'
+$env:KUBEROUTE_RAG_EMBEDDING_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_MODEL_ID = 'qwen3:0.6b'
+python -m uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8001
+```
+
+Do not set `KUBEROUTE_REMOTE_MODELS_JSON` alongside the legacy remote-model
+variables above. A trusted compiled dashboard artifact can be served by that
+same localhost gateway without local Node.js; the existing frontend CI job
+publishes the downloadable artifact. Each returned citation gets the stable
+catalog ID, title, authors, year when known, source type, and original HTTPS
+publication link only when its runtime source hash matches a validated manifest
+document. The hash and chunk fields remain in the API. Unknown sources keep
+the hash-only display. The dashboard links to the original publication with
+browser isolation attributes; it does not follow publication redirects on the
+server. A citation identifies a retrieved passage, not proof that every claim
+in the answer is supported. The same manifest format works for future domains.
+Keep private manifest paths out of logs and restart the gateway after changes.
+
 A small localhost-only smoke test on October 23, 2026 used five temporary
 synthetic documents, `nomic-embed-text:latest`, and `llama3.2:3b`. The index
 initialized with five chunks. Two supported-question requests returned HTTP 200,

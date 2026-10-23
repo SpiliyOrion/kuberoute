@@ -16,6 +16,14 @@ export interface RagSource {
   sourceId: string
   chunkId: string
   chunkIndex: number
+  reference?: {
+    catalogId: string
+    title: string
+    authors: string
+    publicationYear: number | null
+    sourceType: string
+    originalUrl: string
+  }
 }
 
 export interface RagCompletion {

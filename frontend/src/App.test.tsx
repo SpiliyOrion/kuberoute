@@ -112,6 +112,26 @@ function ragResponse(answer = 'Synthetic answer [1]', sources: unknown[] = [{ ma
   return new Response(JSON.stringify({ answer, model: 'qwen3:0.6b', retrieval_mode: 'hybrid', finish_reason: 'stop', sources }), { status: 200 })
 }
 
+it('renders verified bibliographic citations as safe external links', async () => {
+  const source = { marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2,
+    catalog_id: 'verified_study', title: '<Synthetic study>', authors: 'Research Group', publication_year: 2023,
+    source_type: 'review', original_url: 'https://example.org/study' }
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : ragResponse('Answer [1]', [source])))
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Question{enter}')
+  const link = await screen.findByRole('link', { name: '<Synthetic study>' })
+  expect(link).toHaveAttribute('href', 'https://example.org/study')
+  expect(link).toHaveAttribute('target', '_blank')
+  expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  expect(link).toHaveAttribute('referrerpolicy', 'no-referrer')
+  expect(link.closest('li')).toHaveTextContent('Research Group (2023)')
+  expect(link.closest('li')).toHaveTextContent('verified_study')
+  expect(document.querySelector('synthetic')).toBeNull()
+  expect(screen.getByText(/Citation markers identify retrieved passages/)).toBeInTheDocument()
+})
+
 it('switches between chat and independent RAG questions without sending history', async () => {
   const mocked = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : url === '/v1/rag/chat/completions' ? ragResponse() : chatResponse()))
   globalThis.fetch = mocked
