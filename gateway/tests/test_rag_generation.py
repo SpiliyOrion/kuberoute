@@ -133,8 +133,8 @@ def test_empty_retrieval_abstains_without_generation() -> None:
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("content", ["Unknown [9]", "", "Only prose"])
-def test_citation_validation_and_no_fabrication(content: str) -> None:
+@pytest.mark.parametrize("content", ["Unknown [9]", "", None, "Only prose"])
+def test_citation_validation_and_no_fabrication(content: str | None) -> None:
     async def run() -> None:
         async def generate(request: NormalizedChatRequest) -> GeneratedAnswer:
             return GeneratedAnswer(content, "real-model", "stop")
@@ -188,6 +188,59 @@ def test_duplicate_evidence_context_budget_and_injection() -> None:
                 provider=FakeProvider(),
                 generate=generate,
                 context_limit=4,
+            )
+
+    asyncio.run(run())
+
+
+def test_citations_follow_trimmed_evidence_without_duplicate_sources() -> None:
+    async def run() -> None:
+        results = (
+            _result(0, "X" * 90),
+            _result(1, "A short relevant passage."),
+            _result(2, "A short relevant passage."),
+            _result(3, "Another relevant passage."),
+        )
+        seen: list[NormalizedChatRequest] = []
+
+        async def generate(request: NormalizedChatRequest) -> GeneratedAnswer:
+            seen.append(request)
+            return GeneratedAnswer("Supported [1], also [1] and [2].", "test-model", "length")
+
+        answer = await answer_question(
+            question="What is supported?",
+            model="test-model",
+            retriever=FakeRetriever(results),
+            provider=FakeProvider(),
+            generate=generate,
+            top_k=4,
+            context_limit=65,
+        )
+        assert answer.finish_reason == "length"
+        assert [(ref.marker, ref.chunk_id) for ref in answer.sources] == [
+            ("[1]", "chunk-1"),
+            ("[2]", "chunk-3"),
+        ]
+        evidence = seen[0].messages[1].content
+        assert "X" * 90 not in evidence
+        assert evidence.count("A short relevant passage.") == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("content", ["Invented [3]", "Padded [01]", "Mixed [1] [99]"])
+def test_unsupported_numeric_citations_fail_closed(content: str) -> None:
+    async def run() -> None:
+        async def generate(request: NormalizedChatRequest) -> GeneratedAnswer:
+            return GeneratedAnswer(content, "test-model", "stop")
+
+        with pytest.raises(RagGenerationError):
+            await answer_question(
+                question="What is supported?",
+                model="test-model",
+                retriever=FakeRetriever((_result(0, "Evidence."),)),
+                provider=FakeProvider(),
+                generate=generate,
             )
 
     asyncio.run(run())
