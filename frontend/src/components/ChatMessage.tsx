@@ -23,9 +23,17 @@ export function ChatMessage({ message }: { message: ConversationMessage }) {
     <div className="message-body">
       <div className="message-meta"><strong>{message.role === 'assistant' ? 'KubeRoute' : 'You'}</strong>
         {message.model && <span className="model-chip">Responded: {message.model}</span>}
+        {message.rag && <span className="model-chip">Retrieval: {message.rag.retrievalMode}</span>}
         {message.finishReason === 'length' && <span className="length-chip">Output limit reached</span>}
       </div>
       <MessageText content={message.content} />
+      {message.rag && <div className="rag-sources">
+        <strong>Source references</strong>
+        {message.rag.sources.length > 0 ? <ul>{message.rag.sources.map((source) => <li key={source.marker}>
+          <strong>{source.marker}</strong> Source <code>{source.sourceId}</code> · chunk <code>{source.chunkId}</code> · index {source.chunkIndex}
+        </li>)}</ul> : <p>No source references were returned. The answer has no cited support.</p>}
+        <p>Citation markers identify retrieved passages; they do not prove that the answer&apos;s claims are grounded.</p>
+      </div>}
       {message.role === 'assistant' && <button type="button" className="text-button copy-button" onClick={() => void copy()} aria-label="Copy response">{copied ? 'Copied' : 'Copy response'}</button>}
     </div>
   </article>

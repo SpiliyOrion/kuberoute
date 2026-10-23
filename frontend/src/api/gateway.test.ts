@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { completeChat, discoverModels, GatewayError } from './gateway'
+import { completeChat, completeRag, discoverModels, GatewayError } from './gateway'
 
 const originalFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = originalFetch })
@@ -42,5 +42,51 @@ describe('gateway HTTP client', () => {
   it.each([completion('x', ''), completion('x', 'hi', 'unknown'), { ...completion(), choices: [] }, { ...completion(), choices: [completion().choices[0], completion().choices[0]] }])('rejects malformed completions', async (body) => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
     await expect(completeChat('auto', [], new AbortController().signal)).rejects.toThrow('invalid completion')
+  })
+})
+
+describe('RAG HTTP client', () => {
+  const result = {
+    answer: 'A grounded answer [1].', model: 'qwen3:0.6b', retrieval_mode: 'hybrid',
+    finish_reason: 'stop', sources: [{ marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2 }],
+  }
+
+  it('sends only the current question and bounded retrieval settings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200 }))
+    globalThis.fetch = fetchMock
+    expect(await completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).toEqual({
+      answer: 'A grounded answer [1].', model: 'qwen3:0.6b', retrievalMode: 'hybrid',
+      finishReason: 'stop', sources: [{ marker: '[1]', sourceId: 'a'.repeat(64), chunkId: 'b'.repeat(64), chunkIndex: 2 }],
+    })
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/rag/chat/completions')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      model: 'auto', question: 'Question?', retrieval_mode: 'hybrid', top_k: 5, stream: false,
+    })
+  })
+
+  it('accepts a no-evidence abstention without inventing a model or source', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ answer: 'Insufficient information.', model: null, retrieval_mode: 'lexical', finish_reason: null, sources: [] }), { status: 200 }))
+    const answer = await completeRag('auto', 'Question?', 'lexical', 1, new AbortController().signal)
+    expect(answer.model).toBeNull()
+    expect(answer.sources).toEqual([])
+  })
+
+  it.each([[503, 'disabled or its document index'], [413, 'context exceeds'], [422, 'rejected'], [502, 'Embedding or inference'], [504, 'timed out'], [500, 'could not complete']])('maps HTTP %i without exposing details', async (status, safeText) => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('private path and upstream key', { status }))
+    await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow(safeText)
+  })
+
+  it.each([
+    { ...result, answer: '' },
+    { ...result, sources: [{ ...result.sources[0], marker: '[11]' }] },
+    { ...result, sources: [result.sources[0], result.sources[0]] },
+    { ...result, sources: [{ ...result.sources[0], chunk_index: -1 }] },
+    { ...result, sources: [{ ...result.sources[0], source_id: 'C:\\private\\file.txt' }] },
+    { ...result, model: null },
+    { ...result, retrieval_mode: 'unknown' },
+    { ...result, finish_reason: 'tool_calls' },
+  ])('rejects malformed responses safely', async (body) => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow('invalid RAG answer')
   })
 })

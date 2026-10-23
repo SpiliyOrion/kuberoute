@@ -187,6 +187,34 @@ button {
   outline:2px solid #77ddc1;
   outline-offset:2px
 }
+.rag-controls {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:12px 20px;
+  padding:14px 42px;
+  border-bottom:1px solid #242c39;
+  color:#a6b5c8;
+  font-size:12px
+}
+.rag-controls label {
+  display:flex;
+  align-items:center;
+  gap:9px
+}
+.rag-controls select {
+  border:1px solid #3c4b60;
+  border-radius:8px;
+  color:#e9f0fa;
+  background:#202939;
+  padding:7px
+}
+.rag-controls p {
+  flex-basis:100%;
+  margin:0;
+  color:#93a7bf;
+  line-height:1.5
+}
 .menu-button {
   display:none;
   background:none;
@@ -337,6 +365,30 @@ button {
   font-size:12px;
   line-height:1.6
 }
+.rag-sources {
+  margin-top:15px;
+  border-left:2px solid #5a9e9b;
+  padding:3px 0 3px 13px;
+  color:#a9bbcd;
+  font-size:12px;
+  line-height:1.55
+}
+.rag-sources ul {
+  list-style:none;
+  padding:0;
+  margin:7px 0
+}
+.rag-sources li {
+  padding:5px 0;
+  overflow-wrap:anywhere
+}
+.rag-sources code {
+  color:#c3d9ed;
+  overflow-wrap:anywhere
+}
+.rag-sources p {
+  margin:7px 0 0
+}
 .text-button {
   border:0;
   background:none;
@@ -435,6 +487,9 @@ button {
   .toolbar-right {
     gap:12px
   }
+  .rag-controls {
+    padding:12px 24px
+  }
   .connection {
     display:none
   }
@@ -469,6 +524,16 @@ button {
   .model-selector select {
     min-width:150px;
     max-width:190px
+  }
+  .toolbar-right {
+    gap:6px
+  }
+  .model-selector select {
+    min-width:0;
+    max-width:145px
+  }
+  .rag-controls {
+    padding:12px 17px
   }
   .conversation-content {
     padding:20px
