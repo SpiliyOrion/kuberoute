@@ -107,3 +107,71 @@ it('uses Shift+Enter for a newline without sending', async () => {
   fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
   expect(mocked.mock.calls.filter((call) => call[0] === '/v1/chat/completions')).toHaveLength(0)
 })
+
+function ragResponse(answer = 'Synthetic answer [1]', sources: unknown[] = [{ marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2 }]) {
+  return new Response(JSON.stringify({ answer, model: 'qwen3:0.6b', retrieval_mode: 'hybrid', finish_reason: 'stop', sources }), { status: 200 })
+}
+
+it('switches between chat and independent RAG questions without sending history', async () => {
+  const mocked = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : url === '/v1/rag/chat/completions' ? ragResponse() : chatResponse()))
+  globalThis.fetch = mocked
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.type(screen.getByRole('textbox', { name: 'Message' }), 'Ordinary chat{enter}')
+  await screen.findByText('Result')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  expect(screen.queryByText('Ordinary chat')).not.toBeInTheDocument()
+  expect(screen.getByText(/Each RAG question is independent/)).toBeInTheDocument()
+  expect(screen.getByRole('combobox', { name: 'Retrieval mode' })).toHaveValue('hybrid')
+  expect(screen.getByRole('combobox', { name: 'Top-K passages' })).toHaveValue('5')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'First question{enter}')
+  await screen.findByText('Synthetic answer [1]')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Second question{enter}')
+  await waitFor(() => expect(mocked.mock.calls.filter((call) => call[0] === '/v1/rag/chat/completions')).toHaveLength(2))
+  const ragCalls = mocked.mock.calls.filter((call) => call[0] === '/v1/rag/chat/completions')
+  expect(JSON.parse(ragCalls[0][1].body)).toEqual({ model: 'auto', question: 'First question', retrieval_mode: 'hybrid', top_k: 5, stream: false })
+  expect(JSON.parse(ragCalls[1][1].body)).toEqual({ model: 'auto', question: 'Second question', retrieval_mode: 'hybrid', top_k: 5, stream: false })
+  expect(mocked.mock.calls.filter((call) => call[0] === '/v1/chat/completions')).toHaveLength(1)
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'chat')
+  expect(screen.getByText('Ordinary chat')).toBeInTheDocument()
+})
+
+it('sends selected retrieval controls and displays only provided source identifiers', async () => {
+  const mocked = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : ragResponse()))
+  globalThis.fetch = mocked
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Select model' }), 'qwen3:0.6b')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Retrieval mode' }), 'lexical')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Top-K passages' }), '3')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Question{enter}')
+  expect(await screen.findByText('Synthetic answer [1]')).toBeInTheDocument()
+  expect(screen.getByText('Responded: qwen3:0.6b')).toBeInTheDocument()
+  expect(screen.getByText('Retrieval: hybrid')).toBeInTheDocument()
+  expect(screen.getByText('a'.repeat(64)).closest('li')).toHaveTextContent('b'.repeat(64))
+  expect(screen.getByText('a'.repeat(64)).closest('li')).toHaveTextContent('index 2')
+  expect(screen.getByText(/Citation markers identify retrieved passages/)).toBeInTheDocument()
+  const body = JSON.parse(mocked.mock.calls.find((call) => call[0] === '/v1/rag/chat/completions')![1].body)
+  expect(body).toEqual({ model: 'qwen3:0.6b', question: 'Question', retrieval_mode: 'lexical', top_k: 3, stream: false })
+})
+
+it('shows no-citation and safe error states without rendering hostile HTML', async () => {
+  let calls = 0
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+    if (url === '/v1/models') return Promise.resolve(modelsResponse())
+    calls += 1
+    return Promise.resolve(calls === 1 ? new Response('private path / key', { status: 503 }) : ragResponse('<img src=x onerror=alert(1)>', []))
+  })
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Question{enter}')
+  expect(await screen.findByRole('alert')).toHaveTextContent('RAG is disabled or its document index is unavailable')
+  expect(screen.queryByText('private path / key')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry request' }))
+  expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeInTheDocument()
+  expect(document.querySelector('img')).toBeNull()
+  expect(screen.getByText('No source references were returned. The answer has no cited support.')).toBeInTheDocument()
+  expect(screen.getAllByText('Question')).toHaveLength(1)
+})

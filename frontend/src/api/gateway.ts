@@ -1,4 +1,4 @@
-import type { Completion, GatewayMessage } from '../types'
+import type { Completion, GatewayMessage, RagCompletion, RagSource, RetrievalMode } from '../types'
 
 const MAX_MODEL_ID_CHARS = 128
 
@@ -113,5 +113,84 @@ export async function completeChat(
     content: body.choices[0].message.content,
     model: body.model,
     finishReason: body.choices[0].finish_reason,
+  }
+}
+
+export async function completeRag(
+  model: string,
+  question: string,
+  retrievalMode: RetrievalMode,
+  topK: number,
+  signal: AbortSignal,
+): Promise<RagCompletion> {
+  let response: Response
+  try {
+    response = await fetch('/v1/rag/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, question, retrieval_mode: retrievalMode, top_k: topK, stream: false }),
+      signal,
+    })
+  } catch {
+    if (signal.aborted) throw signal.reason
+    throw new GatewayError('network', 'Connection lost. Check the local gateway and retry.')
+  }
+  if (!response.ok) {
+    switch (response.status) {
+      case 503:
+        throw new GatewayError('upstream', 'RAG is disabled or its document index is unavailable. Check the local RAG setup.')
+      case 413:
+        throw new GatewayError('input', 'Retrieved context exceeds the gateway limit. Try fewer passages.')
+      case 422:
+        throw new GatewayError('input', 'The gateway rejected this RAG question or retrieval setting.')
+      case 404:
+        throw new GatewayError('model', 'That model is unavailable. Refresh the model list or choose another.')
+      case 504:
+        throw new GatewayError('timeout', 'Inference timed out. You can retry the question.')
+      case 502:
+        throw new GatewayError('upstream', 'Embedding or inference failed. You can retry the question.')
+      default:
+        throw new GatewayError('upstream', 'The gateway could not complete this RAG question.')
+    }
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
+  }
+  if (
+    !isRecord(body) ||
+    typeof body.answer !== 'string' || !body.answer.trim() || body.answer.length > 32000 ||
+    (body.model !== null && (typeof body.model !== 'string' || !body.model || body.model === 'auto' || body.model.length > MAX_MODEL_ID_CHARS)) ||
+    (body.retrieval_mode !== 'hybrid' && body.retrieval_mode !== 'semantic' && body.retrieval_mode !== 'lexical') ||
+    !Array.isArray(body.sources) || body.sources.length > 10 ||
+    (body.finish_reason !== null && body.finish_reason !== 'stop' && body.finish_reason !== 'length') ||
+    (body.model === null && (body.sources.length !== 0 || body.finish_reason !== null)) ||
+    (body.model !== null && body.finish_reason === null)
+  ) {
+    throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
+  }
+  const sources: RagSource[] = []
+  const seen = new Set<string>()
+  for (const source of body.sources) {
+    if (
+      !isRecord(source) || typeof source.marker !== 'string' ||
+      !/^\[(?:[1-9]|10)\]$/.test(source.marker) || seen.has(source.marker) ||
+      typeof source.source_id !== 'string' || !/^[a-f0-9]{64}$/.test(source.source_id) ||
+      typeof source.chunk_id !== 'string' || !/^[a-f0-9]{64}$/.test(source.chunk_id) ||
+      typeof source.chunk_index !== 'number' || !Number.isSafeInteger(source.chunk_index) || source.chunk_index < 0
+    ) {
+      throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
+    }
+    seen.add(source.marker)
+    sources.push({ marker: source.marker, sourceId: source.source_id, chunkId: source.chunk_id, chunkIndex: source.chunk_index })
+  }
+  return {
+    answer: body.answer as string,
+    model: body.model as string | null,
+    retrievalMode: body.retrieval_mode as RetrievalMode,
+    sources,
+    finishReason: body.finish_reason as 'stop' | 'length' | null,
   }
 }

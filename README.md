@@ -905,8 +905,41 @@ history and cancels an outstanding request. Retry resends the failed request
 without duplicating the user message. Inputs are limited to 4,000 characters;
 each request sends at most the latest 16 messages and 16,000 total characters.
 Older conversation content may therefore be omitted from later inference
-requests. The dashboard has no accounts, persistent history, streaming, RAG
-controls, citations, or public deployment configuration.
+requests. The dashboard has no accounts, persistent history, streaming, or
+public deployment configuration.
+
+### RAG dashboard mode (Phase 10B)
+
+Use the **Mode** selector to switch between ordinary multi-turn Chat and
+document-grounded RAG. Chat continues to call `/v1/chat/completions` with its
+bounded conversation history. RAG calls `/v1/rag/chat/completions` with only the
+current question. Earlier RAG questions and answers can remain visible in the
+current browser tab, but the endpoint has no conversational memory and never
+receives that visual history. Switching modes keeps the two histories separate;
+**New RAG session** clears only the visible RAG history.
+
+To try RAG locally, create the small synthetic Markdown file and configure the
+gateway using the PowerShell commands in [Opt-in RAG chat generation](#opt-in-rag-chat-generation).
+The chosen embedding model must already be installed; KubeRoute does not
+download it. Start the configured gateway bound to `127.0.0.1:8000`, then
+download the **frontend build artifact from this branch's successful GitHub
+Actions run** and extract it into `frontend/dist` using the managed-PC commands
+above. No local Node.js installation is required. Open `http://127.0.0.1:8000/`,
+select **RAG**, keep **Hybrid search** and **Top-K 5**, and ask: “What does the
+synthetic guide say about timeouts?” Try **Semantic search** or **Lexical / BM25
+search** to compare retrieval modes. The same localhost origin serves the
+dashboard and API; no CORS change is needed.
+
+RAG displays the returned answer, actual model when generation occurred,
+retrieval mode, and only the returned citation markers, source IDs, chunk IDs,
+and chunk indexes. It does not display invented filenames, excerpts, scores,
+or links. A marker identifies a retrieved passage, **not proof** that a claim is
+supported. A no-evidence answer may have no responding model, and an uncited
+answer is clearly marked as having no cited support. The dashboard renders
+answer text without interpreting HTML. If RAG is disabled, the index is
+unavailable, or retrieval/inference fails, the UI gives a generic error rather
+than displaying server internals. Documents remain explicitly configured on
+the trusted local gateway; the dashboard provides no uploads or browsing.
 
 ## Test
 
