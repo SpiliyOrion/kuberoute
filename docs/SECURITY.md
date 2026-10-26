@@ -29,6 +29,14 @@ an Ingress, NodePort, LoadBalancer, public proxy, or non-local port binding.
   out of default dataclass representations where applicable. RAG evidence is
   still sent to the **configured** inference server. Only configure trusted
   local backends for private documents.
+- Optional document uploads accept one bounded raw UTF-8 `.txt` or `.md` body
+  and index it in a separate, temporary in-memory collection. The gateway
+  writes no uploaded files and clears the collection on restart. It returns
+  sanitized validation/indexing errors and only safe display names and opaque
+  IDs in the list API. Uploaded names are still visible to anyone who can
+  reach that endpoint; use non-sensitive names. Uploads require an explicit
+  opt-in and are intended for localhost only. They have no authentication or
+  rate limiting and must not be enabled on a publicly reachable gateway.
 - `.gitignore` excludes environment files, private keys, local data folders,
   benchmark/evaluation outputs, logs, databases, and generated frontend files.
   Git ignore rules do not remove files already tracked or prevent manual
