@@ -41,6 +41,15 @@ from kuberoute_gateway.rag.generation import (
 from kuberoute_gateway.rag.hybrid import HybridRetriever
 from kuberoute_gateway.rag.ingestion import ingest_paths, load_documents
 from kuberoute_gateway.rag.schemas import RagChatRequest, RagChatResponse, RagSource
+from kuberoute_gateway.rag.uploads import (
+    MAX_UPLOAD_BYTES,
+    UploadCollection,
+    UploadInputError,
+    UploadTooLargeError,
+    UploadUnsupportedTypeError,
+    prepare_upload,
+    upload_config_from_env,
+)
 from kuberoute_gateway.registry import ModelRegistry, UnknownModelError
 from kuberoute_gateway.remote_backend import (
     BackendConnectionError,
@@ -124,6 +133,20 @@ async def _initialize_rag(stack: AsyncExitStack, config: RagConfig) -> RagRuntim
     return RagRuntime(retriever, provider, catalog_by_source_id)
 
 
+async def _initialize_uploads(stack: AsyncExitStack) -> UploadCollection | None:
+    config = upload_config_from_env()
+    if config is None:
+        return None
+    provider = OllamaEmbeddingProvider(config.embedding_base_url, config.embedding_model)
+    try:
+        await provider.start()
+    except BaseException:
+        await provider.close()
+        raise
+    stack.push_async_callback(_close_embedding_provider, provider)
+    return UploadCollection(config.embedding_model, provider)
+
+
 async def _close_remote_backend(backend: OpenAICompatibleBackend) -> None:
     try:
         await backend.close()
@@ -144,6 +167,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.rag_runtime = None
     app.state.rag_enabled = False
+    app.state.upload_runtime = None
+    app.state.upload_enabled = False
     try:
         async with AsyncExitStack() as stack:
             for model_id in registry.model_ids():
@@ -163,11 +188,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 # Other gateway routes remain usable when the optional index is unavailable.
                 app.state.rag_enabled = True
                 app.state.rag_runtime = None
+            try:
+                app.state.upload_runtime = await _initialize_uploads(stack)
+                app.state.upload_enabled = app.state.upload_runtime is not None
+            except Exception:
+                # Upload configuration/indexing failures do not affect existing routes.
+                app.state.upload_enabled = True
+                app.state.upload_runtime = None
             yield
     finally:
         del app.state.adaptive_routing
         del app.state.rag_runtime
         del app.state.rag_enabled
+        del app.state.upload_runtime
+        del app.state.upload_enabled
 
 
 app = FastAPI(title="KubeRoute Gateway", version="0.1.0", lifespan=lifespan)
@@ -377,6 +411,79 @@ async def create_rag_chat_completion(
         finish_reason=result.finish_reason,
         usage=result.usage,
     )
+
+
+def _uploads_or_error(http_request: Request) -> UploadCollection:
+    if not http_request.app.state.upload_enabled:
+        raise HTTPException(status_code=503, detail="Document uploads are disabled")
+    runtime: UploadCollection | None = http_request.app.state.upload_runtime
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Document upload index is unavailable")
+    return runtime
+
+
+@app.post("/v1/rag/uploads", status_code=201)
+async def upload_rag_document(http_request: Request, response: Response) -> dict[str, object]:
+    """Index one bounded raw UTF-8 document in an isolated ephemeral collection."""
+    runtime = _uploads_or_error(http_request)
+    content_length = http_request.headers.get("content-length")
+    if (
+        content_length is not None
+        and content_length.isdecimal()
+        and int(content_length) > MAX_UPLOAD_BYTES
+    ):
+        raise HTTPException(status_code=413, detail="Document exceeds the upload size limit")
+    raw = bytearray()
+    try:
+        async for part in http_request.stream():
+            if len(part) > MAX_UPLOAD_BYTES - len(raw):
+                raise UploadTooLargeError("Document exceeds the upload size limit")
+            raw.extend(part)
+        document, name = prepare_upload(
+            http_request.headers.get("x-document-name"),
+            http_request.headers.get("content-type"),
+            bytes(raw),
+        )
+        indexed = await runtime.add(document, name)
+    except UploadTooLargeError as exc:
+        raise HTTPException(
+            status_code=413, detail="Document exceeds the upload size limit"
+        ) from exc
+    except UploadUnsupportedTypeError as exc:
+        raise HTTPException(status_code=415, detail="Document type is unsupported") from exc
+    except UploadInputError as exc:
+        raise HTTPException(status_code=422, detail="Document is invalid") from exc
+    except (EmbeddingInputError, EmbeddingServiceError) as exc:
+        raise HTTPException(status_code=502, detail="Document indexing failed") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Document indexing failed") from exc
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "id": indexed.id,
+        "name": indexed.name,
+        "byte_size": indexed.byte_size,
+        "chunk_count": indexed.chunk_count,
+    }
+
+
+@app.get("/v1/rag/uploads")
+async def list_uploaded_documents(http_request: Request, response: Response) -> dict[str, object]:
+    """List only documents fully committed to the uploaded collection."""
+    runtime = _uploads_or_error(http_request)
+    documents = await runtime.list_documents()
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": document.id,
+                "name": document.name,
+                "byte_size": document.byte_size,
+                "chunk_count": document.chunk_count,
+            }
+            for document in documents
+        ],
+    }
 
 
 @app.get("/health")

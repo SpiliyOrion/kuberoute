@@ -861,6 +861,50 @@ server. A citation identifies a retrieved passage, not proof that every claim
 in the answer is supported. The same manifest format works for future domains.
 Keep private manifest paths out of logs and restart the gateway after changes.
 
+### Temporary local document uploads
+
+The first upload milestone provides a **separate, in-memory** collection. It
+does not add documents to the curated RAG index or change
+`POST /v1/rag/chat/completions`; querying uploaded documents is not available
+yet. Uploads are off by default and intended only for a gateway bound or
+forwarded to localhost. There is no authentication or rate limiting.
+Configure the existing local Ollama embedding model and opt in before starting
+the gateway:
+
+```powershell
+$env:KUBEROUTE_UPLOADS_ENABLED = 'true'
+$env:KUBEROUTE_RAG_EMBEDDING_MODEL = 'nomic-embed-text'
+$env:KUBEROUTE_RAG_EMBEDDING_BASE_URL = 'http://127.0.0.1:11434'
+python -m uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8001
+```
+
+Submit one raw UTF-8 `.txt` or `.md` document to `POST /v1/rag/uploads`. Set
+`X-Document-Name` to a short, safe display name and `Content-Type` to
+`text/plain` or `text/markdown` (optionally with `charset=utf-8`).
+`application/octet-stream` is also accepted when the extension and UTF-8
+content are valid. Multipart forms and PDFs are not supported. For a harmless
+synthetic example in another PowerShell window:
+
+```powershell
+$demo = Join-Path $env:TEMP 'kuberoute-upload-example.md'
+Set-Content -LiteralPath $demo -Value 'A synthetic local document.' -Encoding utf8
+Invoke-RestMethod -Uri 'http://127.0.0.1:8001/v1/rag/uploads' -Method Post -InFile $demo -ContentType 'text/markdown; charset=utf-8' -Headers @{ 'X-Document-Name' = 'example.md' }
+Invoke-RestMethod -Uri 'http://127.0.0.1:8001/v1/rag/uploads' -Method Get
+Remove-Item -LiteralPath $demo
+```
+
+Successful uploads return HTTP 201 with a random opaque `id`, safe `name`,
+`byte_size`, and `chunk_count`. GET returns `{"object":"list","data":[...]}`
+for fully indexed uploads only. Each file is limited to 1 MiB; the collection
+is limited to 100 documents and 2,000 chunks. Invalid text/name returns 422,
+unsupported type 415, oversize/collection limit 413, indexing failure 502,
+and disabled or unavailable indexing 503. Error bodies do not echo document
+names, paths, contents, or embedding errors. The gateway keeps chunks and
+vectors in process memory only; restarting it clears uploads. The example file
+is a client-side temporary file, not a gateway upload store. Use only trusted
+local documents and non-sensitive display names: GET lists those names to
+anyone who can reach the gateway.
+
 A small localhost-only smoke test on October 23, 2026 used five temporary
 synthetic documents, `nomic-embed-text:latest`, and `llama3.2:3b`. The index
 initialized with five chunks. Two supported-question requests returned HTTP 200,
