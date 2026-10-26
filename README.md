@@ -946,6 +946,13 @@ quality or a general advantage for any mode. Returned markers prove only that
 a passage was supplied: the model can cite an irrelevant passage, and absence
 of citations does not by itself prove that the answer is unsupported or safe.
 
+For a reproducible local **generated-answer review**, run the curated question
+set through the live gateway and label correctness, citation support, and
+appropriate abstention by hand. See
+[`knowledge/exercise_science/evaluation/ANSWER_EVALUATION.md`](knowledge/exercise_science/evaluation/ANSWER_EVALUATION.md).
+The collector does not infer factual correctness from a citation marker or
+publish answers to the repository.
+
 ## Web dashboard (Phase 10A)
 
 The React dashboard provides local, non-streaming multi-turn chat through the
