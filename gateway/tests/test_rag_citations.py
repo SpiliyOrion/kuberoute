@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from kuberoute_gateway.backends import ModelOutput
 from kuberoute_gateway.knowledge_catalog import CatalogError, load_catalog
+from kuberoute_gateway.rag.generation import ABSTENTION
 from kuberoute_gateway.rag.ingestion import load_document
 
 
@@ -161,6 +162,8 @@ def test_configured_catalog_does_not_label_an_unknown_or_uncited_source(
         )
         assert no_citation.status_code == 200
         assert no_citation.json()["sources"] == []
+        assert no_citation.json()["answer"] == ABSTENTION
+        assert no_citation.json()["model"] == "mock-small"
 
 
 def test_invalid_configured_manifest_fails_rag_safely(
