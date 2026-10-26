@@ -333,11 +333,21 @@ async def create_rag_chat_completion(
     request: RagChatRequest, http_request: Request
 ) -> RagChatResponse:
     """Retrieve bounded local evidence and use the existing inference path once."""
-    if not http_request.app.state.rag_enabled:
-        raise HTTPException(status_code=503, detail="RAG is disabled")
-    runtime: RagRuntime | None = http_request.app.state.rag_runtime
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="RAG index is unavailable")
+    upload_runtime: UploadCollection | None = None
+    if request.collection == "uploads":
+        upload_runtime = _uploads_or_error(http_request)
+        retriever = upload_runtime.retriever
+        provider = upload_runtime.provider
+        catalog_by_source_id = {}
+    else:
+        if not http_request.app.state.rag_enabled:
+            raise HTTPException(status_code=503, detail="RAG is disabled")
+        runtime: RagRuntime | None = http_request.app.state.rag_runtime
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="RAG index is unavailable")
+        retriever = runtime.retriever
+        provider = runtime.provider
+        catalog_by_source_id = runtime.catalog_by_source_id
 
     async def generate(normalized: NormalizedChatRequest) -> GeneratedAnswer:
         chat_request = ChatCompletionRequest(
@@ -363,8 +373,8 @@ async def create_rag_chat_completion(
         result = await answer_question(
             question=request.question,
             model=request.model,
-            retriever=runtime.retriever,
-            provider=runtime.provider,
+            retriever=retriever,
+            provider=provider,
             generate=generate,
             retrieval_mode=request.retrieval_mode,
             top_k=request.top_k,
@@ -387,6 +397,10 @@ async def create_rag_chat_completion(
         raise HTTPException(status_code=502, detail="Generated answer is invalid") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="RAG request failed") from exc
+    if upload_runtime is not None and any(
+        upload_runtime.name_for_source(source.source_id) is None for source in result.sources
+    ):
+        raise HTTPException(status_code=502, detail="Uploaded citation is unavailable")
     return RagChatResponse(
         answer=result.answer,
         model=result.model,
@@ -397,13 +411,16 @@ async def create_rag_chat_completion(
                 chunk_id=source.chunk_id,
                 chunk_index=source.chunk_index,
                 catalog_id=metadata.id
-                if (metadata := runtime.catalog_by_source_id.get(source.source_id))
+                if (metadata := catalog_by_source_id.get(source.source_id))
                 else None,
                 title=metadata.title if metadata else None,
                 authors=metadata.authors if metadata else None,
                 publication_year=metadata.publication_year if metadata else None,
                 source_type=metadata.source_type if metadata else None,
                 original_url=metadata.original_url if metadata else None,
+                uploaded_name=(
+                    upload_runtime.name_for_source(source.source_id) if upload_runtime else None
+                ),
             )
             for source in result.sources
         ],

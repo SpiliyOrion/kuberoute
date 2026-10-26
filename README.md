@@ -795,10 +795,18 @@ $body = @{
 Invoke-RestMethod -Uri 'http://127.0.0.1:8000/v1/rag/chat/completions' -Method Post -ContentType 'application/json' -Body $body
 ```
 
+The optional `collection` request field accepts only `"curated"` (the default)
+or `"uploads"`. Existing requests without it continue to use the configured
+curated index. Each request searches exactly one collection; passages are never
+mixed. The same retrieval modes, Top-K and evidence limits, model routing,
+and citation checks apply to both.
+
 `retrieval_mode` can be `hybrid` (default), `semantic`, or `lexical`. A response
 has `answer`, the **actual** selected `model`, `retrieval_mode`, optional
-`finish_reason` and `usage`, and cited `sources` containing only marker, hashed
-source ID, hashed chunk ID, and chunk index. For example:
+`finish_reason` and `usage`, and cited `sources` containing marker, opaque
+source ID, hashed chunk ID, and chunk index. Verified curated sources may add
+bibliographic metadata; uploaded sources may add a safe `uploaded_name`. For
+example, a response without either enrichment is:
 
 ```json
 {
@@ -863,10 +871,10 @@ Keep private manifest paths out of logs and restart the gateway after changes.
 
 ### Temporary local document uploads
 
-The first upload milestone provides a **separate, in-memory** collection. It
-does not add documents to the curated RAG index or change
-`POST /v1/rag/chat/completions`; querying uploaded documents is not available
-yet. Uploads are off by default and intended only for a gateway bound or
+Uploads use a **separate, in-memory** collection and never enter the curated
+RAG index. Send `collection: "uploads"` to query them; omitted or
+`collection: "curated"` uses the original curated index. Uploads are off by
+default and intended only for a gateway bound or
 forwarded to localhost. There is no authentication or rate limiting.
 Configure the existing local Ollama embedding model and opt in before starting
 the gateway:
@@ -875,6 +883,8 @@ the gateway:
 $env:KUBEROUTE_UPLOADS_ENABLED = 'true'
 $env:KUBEROUTE_RAG_EMBEDDING_MODEL = 'nomic-embed-text'
 $env:KUBEROUTE_RAG_EMBEDDING_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_BASE_URL = 'http://127.0.0.1:11434'
+$env:KUBEROUTE_REMOTE_MODEL_ID = 'qwen3:0.6b'
 python -m uvicorn kuberoute_gateway.main:app --host 127.0.0.1 --port 8001
 ```
 
@@ -890,6 +900,8 @@ $demo = Join-Path $env:TEMP 'kuberoute-upload-example.md'
 Set-Content -LiteralPath $demo -Value 'A synthetic local document.' -Encoding utf8
 Invoke-RestMethod -Uri 'http://127.0.0.1:8001/v1/rag/uploads' -Method Post -InFile $demo -ContentType 'text/markdown; charset=utf-8' -Headers @{ 'X-Document-Name' = 'example.md' }
 Invoke-RestMethod -Uri 'http://127.0.0.1:8001/v1/rag/uploads' -Method Get
+$question = @{ model='qwen3:0.6b'; question='What does the synthetic document say?'; collection='uploads'; retrieval_mode='hybrid'; top_k=5; stream=$false } | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://127.0.0.1:8001/v1/rag/chat/completions' -Method Post -ContentType 'application/json' -Body $question
 Remove-Item -LiteralPath $demo
 ```
 
@@ -904,6 +916,14 @@ vectors in process memory only; restarting it clears uploads. The example file
 is a client-side temporary file, not a gateway upload store. Use only trusted
 local documents and non-sensitive display names: GET lists those names to
 anyone who can reach the gateway.
+Uploaded citations retain marker, opaque source and chunk IDs, and chunk index,
+plus `uploaded_name` from the validated display name. They never receive
+bibliographic titles, publication URLs, or catalog IDs. An enabled but empty
+upload collection returns the existing no-evidence abstention; disabled or
+unavailable uploads return sanitized 503. The dashboard still submits curated
+RAG requests by default, but safely displays uploaded names if given an
+uploaded-collection response. The upload collection is local to one gateway
+process; restarting or switching Pods loses its contents.
 
 A small localhost-only smoke test on October 23, 2026 used five temporary
 synthetic documents, `nomic-embed-text:latest`, and `llama3.2:3b`. The index

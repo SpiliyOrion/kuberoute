@@ -120,3 +120,8 @@ class UploadCollection:
     async def list_documents(self) -> tuple[UploadedDocument, ...]:
         async with self._lock:
             return tuple(self._documents.values())
+
+    def name_for_source(self, source_id: str) -> str | None:
+        """Return only a validated name for a fully indexed uploaded source."""
+        document = self._documents.get(source_id)
+        return document.name if document is not None else None

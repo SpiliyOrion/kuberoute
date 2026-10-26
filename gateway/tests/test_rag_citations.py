@@ -86,7 +86,13 @@ def test_verified_citation_maps_exact_ingested_source(
         response = client.post(
             "/v1/rag/chat/completions", json={"model": "mock-small", "question": "Evidence?"}
         )
+        explicit_curated = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "Evidence?", "collection": "curated"},
+        )
     assert response.status_code == 200
+    assert explicit_curated.status_code == 200
+    assert explicit_curated.json()["sources"] == response.json()["sources"]
     source = response.json()["sources"][0]
     assert source["marker"] == "[1]"
     assert source["source_id"] == load_document(document).source_id

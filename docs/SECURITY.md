@@ -37,6 +37,11 @@ an Ingress, NodePort, LoadBalancer, public proxy, or non-local port binding.
   reach that endpoint; use non-sensitive names. Uploads require an explicit
   opt-in and are intended for localhost only. They have no authentication or
   rate limiting and must not be enabled on a publicly reachable gateway.
+  Querying with `collection: "uploads"` sends retrieved uploaded passages to
+  the configured inference backend; `"curated"` remains the default and the
+  two indexes are not mixed. Use only a trusted local backend for private
+  uploads. An uploaded citation displays its validated name, not a publication
+  link or verified bibliography.
 - `.gitignore` excludes environment files, private keys, local data folders,
   benchmark/evaluation outputs, logs, databases, and generated frontend files.
   Git ignore rules do not remove files already tracked or prevent manual
