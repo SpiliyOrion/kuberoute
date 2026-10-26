@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { completeRag, GatewayError } from '../api/gateway'
-import type { ConversationMessage, RetrievalMode } from '../types'
+import type { ConversationMessage, RagCollection, RetrievalMode } from '../types'
 
 export const MAX_QUESTION_CHARS = 2000
 const MAX_VISIBLE_MESSAGES = 100
@@ -11,6 +11,7 @@ interface PendingQuestion {
   question: string
   retrievalMode: RetrievalMode
   topK: number
+  collection: RagCollection
 }
 
 export function useRag() {
@@ -39,7 +40,7 @@ export function useRag() {
     setRetryQuestion(null)
     const timer = window.setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS)
     try {
-      const result = await completeRag(request.model, request.question, request.retrievalMode, request.topK, controller.signal)
+      const result = await completeRag(request.model, request.question, request.retrievalMode, request.topK, controller.signal, request.collection)
       if (generation !== generationRef.current) return
       nextIdRef.current += 1
       updateMessages([...messagesRef.current, {
@@ -65,12 +66,12 @@ export function useRag() {
     }
   }, [updateMessages])
 
-  const send = useCallback((model: string, input: string, retrievalMode: RetrievalMode, topK: number): boolean => {
+  const send = useCallback((model: string, input: string, retrievalMode: RetrievalMode, topK: number, collection: RagCollection): boolean => {
     const question = input.trim()
     if (controllerRef.current || !question || question.length > MAX_QUESTION_CHARS || !Number.isInteger(topK) || topK < 1 || topK > 10) return false
     nextIdRef.current += 1
     updateMessages([...messagesRef.current, { id: String(nextIdRef.current), role: 'user', content: question }])
-    void runRequest({ model, question, retrievalMode, topK })
+    void runRequest({ model, question, retrievalMode, topK, collection })
     return true
   }, [runRequest, updateMessages])
 

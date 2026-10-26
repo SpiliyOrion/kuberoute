@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { completeChat, completeRag, discoverModels, GatewayError } from './gateway'
+import { completeChat, completeRag, discoverModels, GatewayError, listUploads, uploadDocument } from './gateway'
 
 const originalFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = originalFetch })
@@ -96,6 +96,13 @@ describe('RAG HTTP client', () => {
     })
   })
 
+  it('sends the uploaded collection only when selected', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200 }))
+    globalThis.fetch = fetchMock
+    await completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal, 'uploads')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).collection).toBe('uploads')
+  })
+
   it('accepts a no-evidence abstention without inventing a model or source', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ answer: 'Insufficient information.', model: null, retrieval_mode: 'lexical', finish_reason: null, sources: [] }), { status: 200 }))
     const answer = await completeRag('auto', 'Question?', 'lexical', 1, new AbortController().signal)
@@ -120,5 +127,36 @@ describe('RAG HTTP client', () => {
   ])('rejects malformed responses safely', async (body) => {
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
     await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow('invalid RAG answer')
+  })
+})
+
+describe('temporary document uploads', () => {
+  const document = { id: 'a'.repeat(64), name: 'Safe Notes.md', byte_size: 18, chunk_count: 1 }
+
+  it('sends a raw file with its safe name and validates the returned list', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(document), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ object: 'list', data: [document] }), { status: 200 }))
+    globalThis.fetch = fetchMock
+    const file = new File(['Safe note content.'], document.name, { type: 'text/markdown' })
+    expect(await uploadDocument(file)).toEqual({ id: document.id, name: document.name, byteSize: 18, chunkCount: 1 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/rag/uploads')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', body: file, headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'X-Document-Name': 'Safe Notes.md' } })
+    expect(await listUploads()).toEqual([{ id: document.id, name: document.name, byteSize: 18, chunkCount: 1 }])
+  })
+
+  it('rejects unsafe or large files locally and sanitizes server errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('private path', { status: 502 }))
+    globalThis.fetch = fetchMock
+    await expect(uploadDocument(new File(['x'], '../private.md'))).rejects.toThrow('short name')
+    await expect(uploadDocument(new File(['x'], 'report.pdf'))).rejects.toThrow('.txt or .md')
+    await expect(uploadDocument(new File(['x'.repeat(1_048_577)], 'large.txt'))).rejects.toThrow('1 MiB')
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(uploadDocument(new File(['valid text'], 'safe.txt'))).rejects.toThrow('Indexing failed')
+    await expect(listUploads()).rejects.toThrow('Could not list uploaded documents')
+  })
+
+  it('rejects malformed upload metadata rather than displaying it', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ object: 'list', data: [{ ...document, name: '<script>.md' }] }), { status: 200 }))
+    await expect(listUploads()).rejects.toThrow('invalid uploaded document')
   })
 })

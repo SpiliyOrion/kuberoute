@@ -167,6 +167,54 @@ it('shows uploaded citation names without inventing bibliography or links', asyn
   expect(screen.getByText(/Citation markers identify retrieved passages/)).toBeInTheDocument()
 })
 
+it('uploads a document and asks only the uploaded collection, then restores curated mode', async () => {
+  const document = { id: 'a'.repeat(64), name: 'smoke.md', byte_size: 60, chunk_count: 1 }
+  let listed = false
+  const mocked = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+    if (url === '/v1/models') return Promise.resolve(modelsResponse())
+    if (url === '/v1/rag/uploads' && options?.method === 'POST') { listed = true; return Promise.resolve(new Response(JSON.stringify(document), { status: 201 })) }
+    if (url === '/v1/rag/uploads') return Promise.resolve(new Response(JSON.stringify({ object: 'list', data: listed ? [document] : [] }), { status: 200 }))
+    return Promise.resolve(ragResponse('Tuesday [1]', [{ marker: '[1]', source_id: document.id, chunk_id: 'b'.repeat(64), chunk_index: 0, uploaded_name: document.name }]))
+  })
+  globalThis.fetch = mocked
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Collection' }), 'uploads')
+  expect(await screen.findByText('No uploaded documents are indexed in this gateway.')).toBeInTheDocument()
+  const file = new File(['The synthetic protocol uses three sets on Tuesday.'], document.name, { type: 'text/markdown' })
+  await userEvent.upload(screen.getByLabelText('Choose document'), file)
+  await userEvent.click(screen.getByRole('button', { name: 'Upload and index' }))
+  expect(await screen.findByText('Indexed smoke.md (1 chunk).')).toBeInTheDocument()
+  expect(screen.getByText('smoke.md', { selector: 'li' })).toBeInTheDocument()
+  const uploadCall = mocked.mock.calls.find((call) => call[0] === '/v1/rag/uploads' && call[1]?.method === 'POST')
+  expect(uploadCall![1].body).toBe(file)
+  expect(uploadCall![1].headers['X-Document-Name']).toBe('smoke.md')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Which day?{enter}')
+  expect(await screen.findByText('Tuesday [1]')).toBeInTheDocument()
+  expect(screen.getByText(/Uploaded document: smoke.md/)).toBeInTheDocument()
+  const uploadedCall = mocked.mock.calls.find((call) => call[0] === '/v1/rag/chat/completions')
+  expect(JSON.parse(uploadedCall![1].body)).toMatchObject({ collection: 'uploads', question: 'Which day?' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Collection' }), 'curated')
+  expect(screen.queryByText('Tuesday [1]')).not.toBeInTheDocument()
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Research?{enter}')
+  await waitFor(() => expect(mocked.mock.calls.filter((call) => call[0] === '/v1/rag/chat/completions')).toHaveLength(2))
+  expect(JSON.parse(mocked.mock.calls.filter((call) => call[0] === '/v1/rag/chat/completions')[1][1].body).collection).toBeUndefined()
+})
+
+it('shows a safe disabled-uploads message without affecting curated RAG', async () => {
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : url === '/v1/rag/uploads' ? new Response('secret server details', { status: 503 }) : ragResponse()))
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Collection' }), 'uploads')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Document uploads are disabled or unavailable')
+  expect(screen.queryByText('secret server details')).not.toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Collection' }), 'curated')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Research?{enter}')
+  expect(await screen.findByText('Synthetic answer [1]')).toBeInTheDocument()
+})
+
 it('renders verified bibliographic citations as safe external links', async () => {
   const source = { marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2,
     catalog_id: 'verified_study', title: '<Synthetic study>', authors: 'Research Group', publication_year: 2023,

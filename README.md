@@ -920,9 +920,15 @@ Uploaded citations retain marker, opaque source and chunk IDs, and chunk index,
 plus `uploaded_name` from the validated display name. They never receive
 bibliographic titles, publication URLs, or catalog IDs. An enabled but empty
 upload collection returns the existing no-evidence abstention; disabled or
-unavailable uploads return sanitized 503. The dashboard still submits curated
-RAG requests by default, but safely displays uploaded names if given an
-uploaded-collection response. The upload collection is local to one gateway
+unavailable uploads return sanitized 503. The dashboard uses curated RAG by
+default; select **Uploaded documents** to list indexed files, choose a UTF-8
+`.txt` or `.md` file (1 MiB maximum), click **Upload and index**, and ask a
+question about that collection. File names must start with a letter or digit,
+contain only letters, digits, spaces, dots, underscores, or hyphens, and have
+no `..` sequence. The dashboard sends the raw file body and validated display
+name to the upload API. A collection switch clears visible RAG messages so
+answers from different collections are not confused. Use **Refresh list**
+after restarting the gateway. The upload collection is local to one gateway
 process; restarting or switching Pods loses its contents.
 
 A small localhost-only smoke test on October 23, 2026 used five temporary
@@ -1032,15 +1038,18 @@ search** to compare retrieval modes. The same localhost origin serves the
 dashboard and API; no CORS change is needed.
 
 RAG displays the returned answer, actual model when generation occurred,
-retrieval mode, and only the returned citation markers, source IDs, chunk IDs,
-and chunk indexes. It does not display invented filenames, excerpts, scores,
-or links. A marker identifies a retrieved passage, **not proof** that a claim is
-supported. A no-evidence answer may have no responding model, and an uncited
+retrieval mode, and returned citation markers, source IDs, chunk IDs, and chunk
+indexes. Verified curated sources may show publication metadata and links;
+uploaded sources show their validated display names without publication links.
+It does not display invented excerpts or scores. A marker identifies a retrieved
+passage, **not proof** that a claim is supported. A no-evidence answer may have
+no responding model, and an uncited
 answer is clearly marked as having no cited support. The dashboard renders
 answer text without interpreting HTML. If RAG is disabled, the index is
 unavailable, or retrieval/inference fails, the UI gives a generic error rather
-than displaying server internals. Documents remain explicitly configured on
-the trusted local gateway; the dashboard provides no uploads or browsing.
+than displaying server internals. The curated collection remains explicitly
+configured on the trusted local gateway; uploaded documents stay in a separate
+temporary collection. The dashboard does not browse the gateway filesystem.
 
 ## Test
 

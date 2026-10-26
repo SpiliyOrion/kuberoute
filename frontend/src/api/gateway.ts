@@ -1,6 +1,75 @@
-import type { Completion, GatewayMessage, RagCompletion, RagSource, RetrievalMode } from '../types'
+import type { Completion, GatewayMessage, RagCollection, RagCompletion, RagSource, RetrievalMode, UploadedDocument } from '../types'
 
 const MAX_MODEL_ID_CHARS = 128
+const MAX_UPLOAD_BYTES = 1_048_576
+const SAFE_UPLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/
+
+function validUploadName(name: string): boolean {
+  return SAFE_UPLOAD_NAME.test(name) && !name.includes('..') && /\.(?:txt|md)$/i.test(name)
+}
+
+function parseUploadedDocument(value: unknown): UploadedDocument {
+  if (!isRecord(value) || typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id) ||
+    typeof value.name !== 'string' || !validUploadName(value.name) ||
+    typeof value.byte_size !== 'number' || !Number.isSafeInteger(value.byte_size) || value.byte_size < 1 || value.byte_size > MAX_UPLOAD_BYTES ||
+    typeof value.chunk_count !== 'number' || !Number.isSafeInteger(value.chunk_count) || value.chunk_count < 1 || value.chunk_count > 2000) {
+    throw new GatewayError('response', 'The gateway returned an invalid uploaded document.')
+  }
+  return { id: value.id, name: value.name, byteSize: value.byte_size, chunkCount: value.chunk_count }
+}
+
+export async function listUploads(signal?: AbortSignal): Promise<UploadedDocument[]> {
+  let response: Response
+  try {
+    response = await fetch('/v1/rag/uploads', { signal, cache: 'no-store' })
+  } catch {
+    if (signal?.aborted) throw signal.reason
+    throw new GatewayError('network', 'Cannot reach the gateway to list uploaded documents.')
+  }
+  if (response.status === 503) throw new GatewayError('upstream', 'Document uploads are disabled or unavailable. Enable uploads and restart the local gateway.')
+  if (!response.ok) throw new GatewayError('upstream', 'Could not list uploaded documents.')
+  let body: unknown
+  try { body = await response.json() } catch { throw new GatewayError('response', 'The gateway returned an invalid upload list.') }
+  if (!isRecord(body) || body.object !== 'list' || !Array.isArray(body.data) || body.data.length > 100) {
+    throw new GatewayError('response', 'The gateway returned an invalid upload list.')
+  }
+  const documents = body.data.map(parseUploadedDocument)
+  if (new Set(documents.map((document) => document.id)).size !== documents.length) {
+    throw new GatewayError('response', 'The gateway returned an invalid upload list.')
+  }
+  return documents
+}
+
+export async function uploadDocument(file: File, signal?: AbortSignal): Promise<UploadedDocument> {
+  if (!validUploadName(file.name)) throw new GatewayError('input', 'Choose a .txt or .md file with a short name using letters, numbers, spaces, dots, underscores, or hyphens.')
+  if (file.size < 1 || file.size > MAX_UPLOAD_BYTES) throw new GatewayError('input', 'Choose a nonempty file no larger than 1 MiB.')
+  let response: Response
+  try {
+    response = await fetch('/v1/rag/uploads', {
+      method: 'POST',
+      headers: { 'Content-Type': file.name.toLowerCase().endsWith('.md') ? 'text/markdown; charset=utf-8' : 'text/plain; charset=utf-8', 'X-Document-Name': file.name },
+      body: file,
+      signal,
+      cache: 'no-store',
+    })
+  } catch {
+    if (signal?.aborted) throw signal.reason
+    throw new GatewayError('network', 'The upload could not reach the gateway. Try again.')
+  }
+  if (!response.ok) {
+    switch (response.status) {
+      case 503: throw new GatewayError('upstream', 'Document uploads are disabled or unavailable. Enable uploads and restart the local gateway.')
+      case 413: throw new GatewayError('input', 'The file or upload collection exceeds the gateway limit.')
+      case 415: throw new GatewayError('input', 'Only UTF-8 .txt and .md files are supported.')
+      case 422: throw new GatewayError('input', 'The gateway rejected this file. Check its name and UTF-8 text.')
+      case 502: throw new GatewayError('upstream', 'Indexing failed. Check that the local embedding model is running.')
+      default: throw new GatewayError('upstream', 'The gateway could not index this document.')
+    }
+  }
+  let body: unknown
+  try { body = await response.json() } catch { throw new GatewayError('response', 'The gateway returned an invalid upload result.') }
+  return parseUploadedDocument(body)
+}
 
 export class GatewayError extends Error {
   constructor(
@@ -136,13 +205,14 @@ export async function completeRag(
   retrievalMode: RetrievalMode,
   topK: number,
   signal: AbortSignal,
+  collection: RagCollection = 'curated',
 ): Promise<RagCompletion> {
   let response: Response
   try {
     response = await fetch('/v1/rag/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, question, retrieval_mode: retrievalMode, top_k: topK, stream: false }),
+      body: JSON.stringify({ model, question, retrieval_mode: retrievalMode, top_k: topK, stream: false, ...(collection === 'uploads' ? { collection } : {}) }),
       signal,
     })
   } catch {
