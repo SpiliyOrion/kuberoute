@@ -199,6 +199,15 @@ export async function completeRag(
     }
     const metadataFields = ['catalog_id', 'title', 'authors', 'publication_year', 'source_type', 'original_url']
     const hasMetadata = metadataFields.some((field) => source[field] !== undefined)
+    let uploadedName: string | undefined
+    if (source.uploaded_name !== undefined) {
+      if (hasMetadata || typeof source.uploaded_name !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/.test(source.uploaded_name) ||
+        source.uploaded_name.includes('..')) {
+        throw new GatewayError('response', 'The gateway returned an invalid RAG answer.')
+      }
+      uploadedName = source.uploaded_name
+    }
     let reference: RagSource['reference']
     if (hasMetadata) {
       if (
@@ -218,7 +227,7 @@ export async function completeRag(
       }
     }
     seen.add(source.marker)
-    sources.push({ marker: source.marker, sourceId: source.source_id, chunkId: source.chunk_id, chunkIndex: source.chunk_index, ...(reference ? { reference } : {}) })
+    sources.push({ marker: source.marker, sourceId: source.source_id, chunkId: source.chunk_id, chunkIndex: source.chunk_index, ...(reference ? { reference } : {}), ...(uploadedName ? { uploadedName } : {}) })
   }
   return {
     answer: body.answer as string,

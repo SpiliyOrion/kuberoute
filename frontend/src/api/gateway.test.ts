@@ -51,6 +51,20 @@ describe('RAG HTTP client', () => {
     finish_reason: 'stop', sources: [{ marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2 }],
   }
 
+  it('accepts a safe uploaded name without inventing publication metadata', async () => {
+    const source = { ...result.sources[0], uploaded_name: 'Synthetic Notes.md' }
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [source] }), { status: 200 }))
+    const answer = await completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)
+    expect(answer.sources[0].uploadedName).toBe('Synthetic Notes.md')
+    expect(answer.sources[0].reference).toBeUndefined()
+  })
+
+  it.each(['../private.md', 'C:\\private.md', '<script>.md', 'name..md'])('rejects unsafe uploaded name %s', async (name) => {
+    const source = { ...result.sources[0], uploaded_name: name }
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [source] }), { status: 200 }))
+    await expect(completeRag('auto', 'Question?', 'hybrid', 5, new AbortController().signal)).rejects.toThrow('invalid RAG answer')
+  })
+
   it('accepts verified metadata only with a safe HTTPS publication link', async () => {
     const source = { ...result.sources[0], catalog_id: 'verified_study', title: 'Synthetic study', authors: 'Research Group', publication_year: 2023, source_type: 'review', original_url: 'https://example.org/study' }
     globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...result, sources: [source] }), { status: 200 }))

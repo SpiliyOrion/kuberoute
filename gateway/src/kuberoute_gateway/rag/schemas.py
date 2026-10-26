@@ -12,6 +12,7 @@ class RagChatRequest(BaseModel):
 
     model: StrictStr = Field(min_length=1, max_length=128)
     question: StrictStr = Field(min_length=1, max_length=2_000)
+    collection: Literal["curated", "uploads"] = "curated"
     retrieval_mode: Literal["hybrid", "semantic", "lexical"] = "hybrid"
     top_k: StrictInt = Field(default=5, ge=1, le=10)
     temperature: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
@@ -34,6 +35,7 @@ class RagSource(BaseModel):
     publication_year: int | None = Field(default=None, exclude_if=lambda value: value is None)
     source_type: str | None = Field(default=None, exclude_if=lambda value: value is None)
     original_url: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    uploaded_name: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class RagChatResponse(BaseModel):

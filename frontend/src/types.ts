@@ -16,6 +16,7 @@ export interface RagSource {
   sourceId: string
   chunkId: string
   chunkIndex: number
+  uploadedName?: string
   reference?: {
     catalogId: string
     title: string

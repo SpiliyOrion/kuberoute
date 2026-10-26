@@ -34,7 +34,7 @@ export function ChatMessage({ message }: { message: ConversationMessage }) {
             {source.reference.authors}{source.reference.publicationYear !== null ? ` (${source.reference.publicationYear})` : ''} —{' '}
             <a href={source.reference.originalUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{source.reference.title}</a>
             {' '}({source.reference.sourceType}; {source.reference.catalogId}; chunk {source.chunkIndex})
-          </> : <>Source <code>{source.sourceId}</code> · chunk <code>{source.chunkId}</code> · index {source.chunkIndex}</>}
+          </> : source.uploadedName ? <>Uploaded document: {source.uploadedName} · source <code>{source.sourceId}</code> · chunk <code>{source.chunkId}</code> · index {source.chunkIndex}</> : <>Source <code>{source.sourceId}</code> · chunk <code>{source.chunkId}</code> · index {source.chunkIndex}</>}
         </li>)}</ul> : <p>No source references were returned. The answer has no cited support.</p>}
         <p>Citation markers identify retrieved passages; they do not prove that the answer&apos;s claims are grounded.</p>
       </div>}

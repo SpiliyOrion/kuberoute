@@ -153,6 +153,20 @@ function ragResponse(answer = 'Synthetic answer [1]', sources: unknown[] = [{ ma
   return new Response(JSON.stringify({ answer, model: 'qwen3:0.6b', retrieval_mode: 'hybrid', finish_reason: 'stop', sources }), { status: 200 })
 }
 
+it('shows uploaded citation names without inventing bibliography or links', async () => {
+  const source = { marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2,
+    uploaded_name: 'Safe Notes.md' }
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url === '/v1/models' ? modelsResponse() : ragResponse('Answer [1]', [source])))
+  render(<App />)
+  await screen.findByRole('option', { name: 'qwen3:0.6b' })
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'rag')
+  await userEvent.type(screen.getByRole('textbox', { name: 'RAG question' }), 'Question{enter}')
+  const name = await screen.findByText(/Uploaded document: Safe Notes.md/)
+  expect(name.closest('li')).toHaveTextContent('index 2')
+  expect(name.closest('li')?.querySelector('a')).toBeNull()
+  expect(screen.getByText(/Citation markers identify retrieved passages/)).toBeInTheDocument()
+})
+
 it('renders verified bibliographic citations as safe external links', async () => {
   const source = { marker: '[1]', source_id: 'a'.repeat(64), chunk_id: 'b'.repeat(64), chunk_index: 2,
     catalog_id: 'verified_study', title: '<Synthetic study>', authors: 'Research Group', publication_year: 2023,

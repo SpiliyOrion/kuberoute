@@ -6,6 +6,9 @@ from pathlib import Path
 import kuberoute_gateway.main as gateway_main
 import pytest
 from fastapi.testclient import TestClient
+from kuberoute_gateway.backends import ModelOutput, NormalizedChatRequest
+from kuberoute_gateway.rag.generation import ABSTENTION
+from kuberoute_gateway.rag.ingestion import load_document
 from kuberoute_gateway.rag.uploads import MAX_UPLOAD_BYTES
 
 
@@ -186,3 +189,162 @@ def test_upload_provider_start_failure_closes_client_and_preserves_other_routes(
         assert client.get("/v1/rag/uploads").status_code == 503
         assert client.get("/health/live").status_code == 200
     assert FailingProvider.closed == 1
+
+
+@pytest.mark.parametrize("retrieval_mode", ["hybrid", "semantic", "lexical"])
+def test_uploaded_query_uses_only_uploaded_evidence_and_safe_name(
+    enabled: None, monkeypatch: pytest.MonkeyPatch, retrieval_mode: str
+) -> None:
+    seen: list[NormalizedChatRequest] = []
+
+    async def complete(request: NormalizedChatRequest) -> ModelOutput:
+        seen.append(request)
+        return ModelOutput("Supported by uploaded passage [1]", prompt_tokens=10, output_tokens=6)
+
+    monkeypatch.setattr(gateway_main.registry.get("mock-small"), "complete", complete)
+    with TestClient(gateway_main.app) as client:
+        uploaded = _upload(
+            client, "Safe Example.md", b"Rest intervals matter in this synthetic note."
+        )
+        assert uploaded.status_code == 201
+        response = client.post(
+            "/v1/rag/chat/completions",
+            json={
+                "model": "mock-small",
+                "question": "What does the note say about rest intervals?",
+                "collection": "uploads",
+                "retrieval_mode": retrieval_mode,
+                "top_k": 1,
+                "temperature": 0,
+                "seed": 42,
+                "max_tokens": 64,
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "mock-small"
+    assert body["sources"][0]["marker"] == "[1]"
+    assert body["sources"][0]["source_id"] == uploaded.json()["id"]
+    assert body["sources"][0]["uploaded_name"] == "Safe Example.md"
+    assert not set(body["sources"][0]).intersection(
+        {"catalog_id", "title", "authors", "original_url", "publication_year", "source_type"}
+    )
+    assert seen[0].temperature == 0
+    assert seen[0].seed == 42
+    assert seen[0].max_tokens == 64
+    assert "Rest intervals matter" in seen[0].messages[1].content
+    assert "Safe Example.md" not in seen[0].messages[1].content
+
+
+def test_default_curated_and_explicit_uploads_are_isolated_both_ways(
+    enabled: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    curated = tmp_path / "private-curated.md"
+    curated.write_text("Curated volume evidence only.", encoding="utf-8")
+    monkeypatch.setenv("KUBEROUTE_RAG_ENABLED", "true")
+    monkeypatch.setenv("KUBEROUTE_RAG_DOCUMENT_PATHS_JSON", json.dumps([str(curated)]))
+    prompts: list[str] = []
+
+    async def complete(request: NormalizedChatRequest) -> ModelOutput:
+        prompts.append(request.messages[1].content)
+        return ModelOutput("Evidence [1]")
+
+    monkeypatch.setattr(gateway_main.registry.get("mock-small"), "complete", complete)
+    with TestClient(gateway_main.app) as client:
+        uploaded = _upload(client, "uploaded.md", b"Uploaded rest evidence only.")
+        assert uploaded.status_code == 201
+        curated_response = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "volume?", "retrieval_mode": "lexical"},
+        )
+        uploaded_response = client.post(
+            "/v1/rag/chat/completions",
+            json={
+                "model": "mock-small",
+                "question": "rest?",
+                "collection": "uploads",
+                "retrieval_mode": "lexical",
+            },
+        )
+    assert curated_response.status_code == uploaded_response.status_code == 200
+    assert "Curated volume evidence" in prompts[0]
+    assert "Uploaded rest evidence" not in prompts[0]
+    assert "Uploaded rest evidence" in prompts[1]
+    assert "Curated volume evidence" not in prompts[1]
+    curated_source = curated_response.json()["sources"][0]
+    assert curated_source["source_id"] == load_document(curated).source_id
+    assert "uploaded_name" not in curated_source
+    assert uploaded_response.json()["sources"][0]["source_id"] == uploaded.json()["id"]
+    assert uploaded_response.json()["sources"][0]["uploaded_name"] == "uploaded.md"
+    assert str(tmp_path) not in curated_response.text + uploaded_response.text
+
+
+def test_empty_uploaded_collection_abstains_without_model_call(
+    enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unexpected(request: NormalizedChatRequest) -> ModelOutput:
+        raise AssertionError("generation must not run without uploaded evidence")
+
+    monkeypatch.setattr(gateway_main.registry.get("mock-small"), "complete", unexpected)
+    with TestClient(gateway_main.app) as client:
+        response = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "What?", "collection": "uploads"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": ABSTENTION,
+        "model": None,
+        "sources": [],
+        "retrieval_mode": "hybrid",
+        "finish_reason": None,
+        "usage": None,
+    }
+
+
+def test_upload_selector_errors_and_invalid_markers_are_sanitized(
+    enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(gateway_main.app) as client:
+        for invalid in ("other", "curated,uploads", None, 1):
+            response = client.post(
+                "/v1/rag/chat/completions",
+                json={"model": "mock-small", "question": "private", "collection": invalid},
+            )
+            assert response.status_code == 422
+            assert response.json() == {"detail": "RAG request is invalid"}
+            assert "private" not in response.text
+        assert _upload(client, "safe.txt", b"Synthetic evidence.").status_code == 201
+
+        async def invalid_citation(request: NormalizedChatRequest) -> ModelOutput:
+            return ModelOutput("Invented marker [2]")
+
+        monkeypatch.setattr(gateway_main.registry.get("mock-small"), "complete", invalid_citation)
+        bad = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "evidence?", "collection": "uploads"},
+        )
+        assert bad.status_code == 502
+        assert bad.json() == {"detail": "Generated answer is invalid"}
+
+
+def test_upload_query_disabled_or_unavailable_returns_503(
+    enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KUBEROUTE_UPLOADS_ENABLED", "false")
+    with TestClient(gateway_main.app) as client:
+        response = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "What?", "collection": "uploads"},
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Document uploads are disabled"}
+    monkeypatch.setenv("KUBEROUTE_UPLOADS_ENABLED", "true")
+    monkeypatch.delenv("KUBEROUTE_RAG_EMBEDDING_MODEL")
+    with TestClient(gateway_main.app) as client:
+        response = client.post(
+            "/v1/rag/chat/completions",
+            json={"model": "mock-small", "question": "What?", "collection": "uploads"},
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Document upload index is unavailable"}
