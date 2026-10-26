@@ -10,7 +10,7 @@
 body {
   margin:0
 }
-button,select,textarea {
+button,select,textarea,input {
   font:inherit
 }
 button {
@@ -274,6 +274,38 @@ button {
   color:#93a7bf;
   line-height:1.5
 }
+.upload-panel {
+  padding:14px 42px;
+  border-bottom:1px solid #242c39;
+  background:#111a27;
+  color:#cad6e4;
+  font-size:12px
+}
+.upload-heading,.upload-actions {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  flex-wrap:wrap
+}
+.upload-heading strong {font-size:14px;color:#e9f4f4}
+.upload-heading p {margin:5px 0 12px;color:#9bacc1;line-height:1.5}
+.upload-actions {justify-content:flex-start}
+.upload-actions input {max-width:100%;color:#cbd6e3}
+.upload-actions button,.upload-refresh {
+  border:1px solid #587d83;
+  border-radius:8px;
+  padding:7px 12px;
+  color:#e3f7f1;
+  background:#233d46
+}
+.upload-actions button:disabled,.upload-refresh:disabled {opacity:.5;cursor:not-allowed}
+.upload-error {color:#f5beae}
+.upload-notice {color:#8ee6cb}
+.upload-empty,.upload-list {color:#9dafc2;margin:12px 0 0}
+.upload-list {padding-left:20px;max-height:110px;overflow:auto}
+.upload-list li {padding:3px 0;overflow-wrap:anywhere}
+.upload-list span {color:#7f92a9}
 .menu-button {
   display:none;
   background:none;
@@ -549,6 +581,7 @@ button {
   .rag-controls {
     padding:12px 24px
   }
+  .upload-panel {padding:12px 24px}
   .connection {
     display:none
   }
@@ -594,6 +627,7 @@ button {
   .rag-controls {
     padding:12px 17px
   }
+  .upload-panel {padding:12px 17px}
   .help-popover,.rag-setting .help-popover {
     position:fixed;
     top:84px;

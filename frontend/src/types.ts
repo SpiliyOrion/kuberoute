@@ -10,6 +10,14 @@ export interface ConversationMessage {
 }
 
 export type RetrievalMode = 'hybrid' | 'semantic' | 'lexical'
+export type RagCollection = 'curated' | 'uploads'
+
+export interface UploadedDocument {
+  id: string
+  name: string
+  byteSize: number
+  chunkCount: number
+}
 
 export interface RagSource {
   marker: string
