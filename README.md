@@ -822,16 +822,20 @@ At most ten passages are requested and at most 6,000 evidence characters are
 sent to generation; the default output limit is 256 tokens. Duplicate passage
 text is omitted. If retrieval finds no
 evidence, the endpoint abstains without calling a model (`model` and
-`finish_reason` are null, `sources` is empty). If the answer has no valid
-citations, `sources` is empty; invented numeric markers cause a 502. Source
-references identify passages supplied to the model, **not** proof that a claim
-is factually correct. Prompt instructions separate untrusted document text
-from system rules, but prompting does not guarantee resistance to prompt
+`finish_reason` are null, `sources` is empty). If generation returns no cited
+passage, the gateway replaces that text with the existing abstention and empty
+`sources`, retaining the actual responding model and usage. Invented numeric
+markers cause a 502. The prompt also asks the model to decline individualized
+injury rehabilitation requests, but that instruction is not a clinical safety
+guarantee. Source references identify passages supplied to the model, **not**
+proof that a claim is factually correct. Prompt instructions separate untrusted
+document text from system rules, but prompting does not guarantee resistance to prompt
 injection. Generation can still be inaccurate or incomplete, especially when
 `finish_reason` is `length`. Only local inference should be used with private
 documents: configuring an externally hosted inference server would send
-retrieved passage text to that server. No document upload or persistent vector
-store is provided. Set `KUBEROUTE_RAG_ENABLED=false` (or remove it) to disable
+retrieved passage text to that server. Optional uploads are temporary and
+memory-backed; no persistent vector store is provided. Set
+`KUBEROUTE_RAG_ENABLED=false` (or remove it) to disable
 RAG. Missing files, unavailable embedding models, and indexing failures leave
 the RAG endpoint unavailable with sanitized errors while ordinary gateway
 routes remain usable.

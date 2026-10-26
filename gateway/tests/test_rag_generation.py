@@ -110,6 +110,8 @@ def test_grounded_prompt_order_citations_and_controls() -> None:
         assert request.seed == 42 and request.max_tokens == 32
         assert request.messages[0].role == "system"
         assert "untrusted" in request.messages[0].content.lower()
+        assert "individualized injury treatment" in request.messages[0].content
+        assert "cite the relevant [number] passage" in request.messages[0].content
         assert request.messages[1].content.index("[1]") < request.messages[1].content.index("[2]")
 
     asyncio.run(run())
@@ -147,7 +149,11 @@ def test_citation_validation_and_no_fabrication(content: str | None) -> None:
             generate=generate,
         )
         if content == "Only prose":
-            assert (await call).sources == ()
+            result = await call
+            assert result.answer == ABSTENTION
+            assert result.model == "real-model"
+            assert result.finish_reason == "stop"
+            assert result.sources == ()
         else:
             with pytest.raises(RagGenerationError):
                 await call
